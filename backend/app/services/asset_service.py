@@ -92,3 +92,92 @@ def enqueue_image_generation(
 
     finally:
         db.close()
+
+
+def enqueue_video_generation(
+    source_asset_id: str,
+    motion_prompt: str,
+    duration_seconds: int,
+) -> dict:
+    db = SessionLocal()
+
+    try:
+        source_asset = db.query(VideoAsset).filter(
+            VideoAsset.id == source_asset_id
+        ).first()
+
+        if not source_asset:
+            raise ValueError("Source image asset not found")
+
+        if source_asset.asset_type != "image":
+            raise ValueError("Source asset must be an image")
+
+        if source_asset.status != "completed" or not source_asset.source_url:
+            raise ValueError("Source image asset is not ready")
+
+        if duration_seconds < 4 or duration_seconds > 15:
+            raise ValueError(
+                "Video duration must be between 4 and 15 seconds"
+            )
+
+        metadata = source_asset.asset_metadata or {}
+        aspect_ratio = metadata.get("aspect_ratio", "9:16")
+
+        if aspect_ratio not in ("9:16", "16:9", "1:1"):
+            raise ValueError("Unsupported source image aspect ratio")
+
+        asset_id = str(uuid.uuid4())
+        asset = VideoAsset(
+            id=asset_id,
+            job_id=source_asset.job_id,
+            scene_number=source_asset.scene_number,
+            asset_type="video",
+            provider="fal",
+            model=os.getenv(
+                "FAL_VIDEO_MODEL",
+                "bytedance/seedance-2.0/fast/image-to-video",
+            ),
+            status="pending",
+            prompt=motion_prompt,
+            filename=f"pending_{asset_id}.mp4",
+            duration_seconds=duration_seconds,
+            asset_metadata={
+                "aspect_ratio": aspect_ratio,
+                "generation_type": "image_to_video",
+                "source_asset_id": source_asset.id,
+                "source_image_url": source_asset.source_url,
+            },
+        )
+
+        db.add(asset)
+        db.commit()
+
+        try:
+            queue = Queue(
+                "asset-generation",
+                connection=get_redis_connection(),
+                default_timeout=1500,
+            )
+            queue.enqueue(
+                "app.workers.asset_worker.generate_video_asset",
+                asset_id,
+                job_timeout=1500,
+                result_ttl=86400,
+                failure_ttl=604800,
+            )
+        except Exception:
+            asset.status = "failed"
+            asset.error_message = "Unable to enqueue video generation task"
+            db.commit()
+            raise
+
+        return {
+            "asset_id": asset_id,
+            "job_id": asset.job_id,
+            "scene_number": asset.scene_number,
+            "asset_type": asset.asset_type,
+            "status": asset.status,
+            "duration_seconds": asset.duration_seconds,
+        }
+    finally:
+        db.close()

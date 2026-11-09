@@ -23,6 +23,7 @@ from app.database import get_db
 from app.models.video_job import VideoJob
 from app.models.video_asset import VideoAsset
 from app.services.asset_service import enqueue_image_generation
+from app.services.asset_service import enqueue_video_generation
 
 
 router = APIRouter(
@@ -39,6 +40,11 @@ class ImageGenerationRequest(BaseModel):
 class AssetReviewRequest(BaseModel):
     decision: str = Field(pattern="^(approved|rejected)$")
     note: str | None = Field(default=None, max_length=2000)
+
+
+class VideoGenerationRequest(BaseModel):
+    motion_prompt: str = Field(min_length=5, max_length=5000)
+    duration_seconds: int = Field(default=10, ge=4, le=15)
 
 
 def serialize_asset(asset: VideoAsset) -> dict:
@@ -270,6 +276,36 @@ def get_video_asset(
         )
 
     return serialize_asset(asset)
+
+
+@router.post("/assets/{asset_id}/video", status_code=202)
+def create_video_from_image_asset(
+    asset_id: str,
+    data: VideoGenerationRequest,
+    db: Session = Depends(get_db),
+):
+    source_asset = db.query(VideoAsset).filter(
+        VideoAsset.id == asset_id
+    ).first()
+
+    if not source_asset:
+        raise HTTPException(404, "Source image asset not found")
+
+    try:
+        return enqueue_video_generation(
+            source_asset_id=source_asset.id,
+            motion_prompt=data.motion_prompt,
+            duration_seconds=data.duration_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        logging.exception("Video generation enqueue failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to enqueue video generation",
+        )
+
 
 @router.post("/assets/{asset_id}/regenerate", status_code=202)
 def regenerate_video_asset(

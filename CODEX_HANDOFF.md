@@ -52,6 +52,12 @@ The first autonomous-production slice is now implemented locally:
 - PATCH /videos/jobs/{job_id}/versions/{version_id}/approval records an immutable final approval or rejection on the latest completed version. The job remains completed so the existing dashboard keeps the rendered video playable.
 - Publishing remains intentionally unimplemented. A separate migration, 004_video_version_approval.sql, must be applied to existing databases.
 
+### Image-to-video test path — 2026-11-09
+
+POST /videos/assets/{asset_id}/video queues a Seedance image-to-video clip from a completed scene image. It accepts a motion_prompt and duration_seconds from 4 to 15 seconds; the initial test default is 10 seconds at 720p. The completed MP4 is stored as a VideoAsset and can be retrieved from its file_url.
+
+When an approved scene video exists, both render paths prefer it over the source image. This allows Remotion to assemble generated AI video clips while preserving image fallback for scenes without a clip.
+
 ## Current architecture
 
 ### Verified repository facts

@@ -81,7 +81,17 @@ def build_render_manifest(job: VideoJob, db) -> dict:
     scenes = []
 
     for scene in plan.scenes:
-        asset = db.query(VideoAsset).filter(
+        video_asset = db.query(VideoAsset).filter(
+            VideoAsset.job_id == job.id,
+            VideoAsset.scene_number == scene.scene_number,
+            VideoAsset.asset_type == "video",
+            VideoAsset.status == "completed",
+            VideoAsset.review_status == "approved",
+        ).order_by(
+            VideoAsset.created_at.desc()
+        ).first()
+
+        asset = video_asset or db.query(VideoAsset).filter(
             VideoAsset.job_id == job.id,
             VideoAsset.scene_number == scene.scene_number,
             VideoAsset.asset_type == "image",
@@ -113,7 +123,7 @@ def build_render_manifest(job: VideoJob, db) -> dict:
         scenes.append({
             "scene_number": scene.scene_number,
             "duration_seconds": scene.duration_seconds,
-            "visual_type": "image",
+            "visual_type": asset.asset_type,
             "asset_path": str(asset_path),
             "narration": scene.narration,
             "on_screen_text": scene.on_screen_text,

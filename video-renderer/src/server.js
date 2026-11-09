@@ -139,9 +139,9 @@ async function validateDynamicManifest(body) {
       );
     }
 
-    if (scene.visual_type !== "image") {
+    if (!["image", "video"].includes(scene.visual_type)) {
       throw new Error(
-        `Scene ${scene.scene_number}: only image scenes are currently supported`
+        `Scene ${scene.scene_number}: unsupported visual type`
       );
     }
 
@@ -164,8 +164,14 @@ async function validateDynamicManifest(body) {
 
     const extension = path.extname(realAssetPath).toLowerCase();
 
-    if (![".jpg", ".jpeg", ".png", ".webp"].includes(extension)) {
-      throw new Error("Unsupported image format");
+    const allowedExtensions = scene.visual_type === "video"
+      ? [".mp4", ".mov", ".webm"]
+      : [".jpg", ".jpeg", ".png", ".webp"];
+
+    if (!allowedExtensions.includes(extension)) {
+      throw new Error(
+        `Unsupported ${scene.visual_type} format`
+      );
     }
 
     const stat = await fs.stat(realAssetPath);
@@ -184,7 +190,7 @@ async function validateDynamicManifest(body) {
     scenes.push({
       scene_number: scene.scene_number,
       duration_seconds: scene.duration_seconds,
-      visual_type: "image",
+      visual_type: scene.visual_type,
       src: `http://127.0.0.1:${PORT}/assets/${encodedPath}`,
       narration: scene.narration || "",
       on_screen_text: scene.on_screen_text || "",

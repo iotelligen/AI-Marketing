@@ -4,6 +4,7 @@ import {
   AbsoluteFill,
   Sequence,
   Img,
+  OffthreadVideo,
   interpolate,
   useCurrentFrame,
   useVideoConfig,
@@ -12,7 +13,7 @@ import {
 export type DynamicScene = {
   scene_number: number;
   duration_seconds: number;
-  visual_type: "image";
+  visual_type: "image" | "video";
   src: string;
   narration?: string;
   on_screen_text?: string;
@@ -102,14 +103,26 @@ const Scene: React.FC<{
           transform: `translate(${translateX}px, ${slideY}px) scale(${scale})`,
         }}
       >
-        <Img
-          src={scene.src}
-          style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-          }}
-        />
+        {scene.visual_type === "video" ? (
+          <OffthreadVideo
+            src={scene.src}
+            volume={0}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+            }}
+          />
+        ) : (
+          <Img
+            src={scene.src}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+            }}
+          />
+        )}
       </AbsoluteFill>
 
       <AbsoluteFill
@@ -155,12 +168,12 @@ export const DynamicVideo: React.FC<DynamicVideoProps> = ({
   accent_color,
 }) => {
   let currentFrame = 0;
+  const { fps } = useVideoConfig();
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#071522" }}>
       {scenes.map((scene) => {
         const from = currentFrame;
-	const { fps } = useVideoConfig();
         const durationInFrames = scene.duration_seconds * fps;
 
         currentFrame += durationInFrames;

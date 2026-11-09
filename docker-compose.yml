@@ -19,6 +19,8 @@ services:
 
       FAL_KEY: ${FAL_KEY}
       FAL_IMAGE_MODEL: ${FAL_IMAGE_MODEL}
+      FAL_VIDEO_MODEL: ${FAL_VIDEO_MODEL:-bytedance/seedance-2.0/fast/image-to-video}
+      FAL_VIDEO_RESOLUTION: ${FAL_VIDEO_RESOLUTION:-720p}
       ASSET_STORAGE: /data/assets
 
     volumes:
@@ -148,6 +150,8 @@ services:
       ASSET_STORAGE: /data/assets
       FAL_KEY: ${FAL_KEY}
       FAL_IMAGE_MODEL: ${FAL_IMAGE_MODEL}
+      FAL_VIDEO_MODEL: ${FAL_VIDEO_MODEL:-bytedance/seedance-2.0/fast/image-to-video}
+      FAL_VIDEO_RESOLUTION: ${FAL_VIDEO_RESOLUTION:-720p}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}

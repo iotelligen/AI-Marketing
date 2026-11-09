@@ -10,6 +10,7 @@ from app.database import SessionLocal
 from app.models.video_asset import VideoAsset
 from app.models.video_job import VideoJob
 from app.providers.fal.image_provider import FalImageProvider
+from app.providers.fal.video_provider import FalVideoProvider
 from app.services.production_service import advance_autonomous_production
 
 
@@ -124,6 +125,89 @@ def generate_image_asset(asset_id: str):
         logger.exception("Asset generation failed: %s", asset_id)
         raise
 
+    finally:
+        db.close()
+
+
+def generate_video_asset(asset_id: str):
+    db = SessionLocal()
+
+    try:
+        asset = db.query(VideoAsset).filter(
+            VideoAsset.id == asset_id
+        ).first()
+
+        if not asset:
+            raise ValueError(f"Asset not found: {asset_id}")
+
+        if asset.asset_type != "video":
+            raise ValueError("Unsupported asset type")
+
+        metadata = asset.asset_metadata or {}
+        source_image_url = metadata.get("source_image_url")
+        aspect_ratio = metadata.get("aspect_ratio", "9:16")
+
+        if not source_image_url:
+            raise ValueError("Source image URL is unavailable")
+
+        if not asset.duration_seconds:
+            raise ValueError("Video duration is unavailable")
+
+        asset.status = "generating"
+        asset.error_message = None
+        db.commit()
+
+        provider = FalVideoProvider()
+        result = provider.generate_video(
+            prompt=asset.prompt or "",
+            image_url=source_image_url,
+            job_id=asset.job_id,
+            scene_number=asset.scene_number or 1,
+            aspect_ratio=aspect_ratio,
+            duration_seconds=asset.duration_seconds,
+        )
+
+        asset.provider = result["provider"]
+        asset.model = result["model"]
+        asset.filename = result["filename"]
+        asset.storage_path = result["storage_path"]
+        asset.source_url = result["source_url"]
+        asset.mime_type = result["mime_type"]
+        asset.status = "completed"
+        asset.error_message = None
+        asset.review_status = "approved"
+        asset.reviewed_at = datetime.now(timezone.utc)
+        asset.review_note = (
+            "Automatically approved for final-video assembly. "
+            "Final video approval is still required."
+        )
+
+        metadata.update({
+            "provider_request_id": result["request_id"],
+            "file_size_bytes": result["file_size_bytes"],
+            "generation_status": "completed",
+        })
+        asset.asset_metadata = metadata
+        db.commit()
+
+        return {
+            "asset_id": asset_id,
+            "status": "completed",
+            "filename": asset.filename,
+        }
+    except Exception as exc:
+        db.rollback()
+        asset = db.query(VideoAsset).filter(
+            VideoAsset.id == asset_id
+        ).first()
+
+        if asset:
+            asset.status = "failed"
+            asset.error_message = str(exc)[:4000]
+            db.commit()
+
+        logger.exception("Video asset generation failed: %s", asset_id)
+        raise
     finally:
         db.close()
 
