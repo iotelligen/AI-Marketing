@@ -31,7 +31,7 @@ class FalVideoProvider:
                 "FAL_KEY environment variable is not configured"
             )
 
-        if not re.fullmatch(r"[a-zA-Z0-9/_-]+", self.model):
+        if not re.fullmatch(r"[a-zA-Z0-9/_.-]+", self.model):
             raise FalVideoProviderError("Invalid fal.ai model identifier")
 
         if self.resolution not in ("480p", "720p"):
