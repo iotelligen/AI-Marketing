@@ -51,6 +51,8 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [filter, setFilter] = useState("all");
   const [preview, setPreview] = useState<VideoAsset | null>(null);
+  const [motionPrompts, setMotionPrompts] = useState<Record<string, string>>({});
+  const [clipDuration, setClipDuration] = useState(4);
 
   const loadAssets = useCallback(async () => {
     if (!jobId) {
@@ -159,6 +161,31 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
     );
   }
 
+  async function generateVideoClip(asset: VideoAsset) {
+    const motionPrompt =
+      motionPrompts[asset.asset_id]?.trim() ||
+      "Gentle cinematic camera movement that supports the scene with natural motion.";
+
+    if (
+      !window.confirm(
+        `Generate a ${clipDuration}-second AI video clip for scene ${asset.scene_number ?? "—"}? This uses FAL credits and may take several minutes.`
+      )
+    ) {
+      return;
+    }
+
+    await performAction(asset.asset_id, () =>
+      fetch(`${API_URL}/videos/assets/${asset.asset_id}/video`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          motion_prompt: motionPrompt,
+          duration_seconds: clipDuration,
+        }),
+      })
+    );
+  }
+
   async function deleteAsset(asset: VideoAsset) {
     if (
       !window.confirm(
@@ -200,12 +227,16 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
     (asset) => asset.review_status === "pending"
   ).length;
 
+  const videoClipCount = assets.filter(
+    (asset) => asset.asset_type === "video"
+  ).length;
+
   if (!jobId) {
     return (
       <section className="rounded-xl border border-[#E5EAF0] bg-white p-8 text-center">
         <h2 className="font-semibold text-slate-800">Generated assets</h2>
         <p className="mt-2 text-sm text-slate-500">
-          Select a video job above to manage its generated images.
+          Select a video job above to manage generated images and AI video clips.
         </p>
       </section>
     );
@@ -219,7 +250,7 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
             Generated assets
           </h2>
           <p className="mt-1 text-xs text-slate-500">
-            Review and manage images generated for this video.
+            Review scene images, create AI motion clips, and preview their results.
           </p>
         </div>
 
@@ -254,6 +285,36 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
           <div className="mt-1 text-xl font-semibold text-amber-800">
             {pendingCount}
           </div>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-lg border border-violet-100 bg-violet-50 p-4">
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <div>
+            <h3 className="text-sm font-semibold text-violet-950">
+              AI video clips
+            </h3>
+            <p className="mt-1 text-xs text-violet-800">
+              Generate a motion clip from a completed scene image. The 4-second
+              minimum is selected to keep test credit usage low. Completed clips:{" "}
+              {videoClipCount}.
+            </p>
+          </div>
+
+          <label className="flex items-center gap-2 text-xs font-medium text-violet-900">
+            Clip length
+            <select
+              value={clipDuration}
+              onChange={(event) => setClipDuration(Number(event.target.value))}
+              className="rounded-md border border-violet-200 bg-white px-2 py-1.5 text-slate-700"
+            >
+              {[4, 5, 6, 8, 10, 12, 15].map((seconds) => (
+                <option key={seconds} value={seconds}>
+                  {seconds} seconds
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
       </div>
 
@@ -305,35 +366,48 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
               key={asset.asset_id}
               className="overflow-hidden rounded-xl border border-slate-200 bg-white"
             >
-              <button
-                onClick={() => {
-                  if (asset.file_url) setPreview(asset);
-                }}
-                disabled={!asset.file_url}
-                className="relative flex aspect-[9/12] w-full items-center justify-center overflow-hidden bg-slate-100"
-              >
+              <div className="relative flex aspect-[9/12] w-full items-center justify-center overflow-hidden bg-slate-100">
                 {asset.file_url ? (
-                  <img
-                    src={`${API_URL}${asset.file_url}`}
-                    alt={`Scene ${asset.scene_number ?? ""}`}
-                    className="h-full w-full object-cover transition hover:scale-[1.02]"
-                  />
+                  asset.asset_type === "video" ? (
+                    <video
+                      src={`${API_URL}${asset.file_url}`}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      className="h-full w-full bg-black object-cover"
+                    />
+                  ) : (
+                    <button
+                      onClick={() => setPreview(asset)}
+                      className="h-full w-full"
+                      aria-label={`Preview scene ${asset.scene_number ?? ""}`}
+                    >
+                      <img
+                        src={`${API_URL}${asset.file_url}`}
+                        alt={`Scene ${asset.scene_number ?? ""}`}
+                        className="h-full w-full object-cover transition hover:scale-[1.02]"
+                      />
+                    </button>
+                  )
                 ) : (
                   <div className="p-4 text-center text-sm text-slate-500">
                     {asset.status === "failed"
                       ? "Generation failed"
-                      : "Image is being generated"}
+                      : asset.asset_type === "video"
+                        ? "AI video clip is being generated"
+                        : "Image is being generated"}
                     <div className="mt-2 text-xs">
                       {asset.status}
                     </div>
                   </div>
                 )}
-              </button>
+              </div>
 
               <div className="space-y-3 p-4">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm font-semibold text-slate-800">
-                    Scene {asset.scene_number ?? "—"}
+                    {asset.asset_type === "video" ? "AI video clip" : "Scene"}{" "}
+                    {asset.scene_number ?? "—"}
                   </div>
 
                   <span
@@ -353,6 +427,10 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
                   <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] text-slate-600">
                     {asset.provider ?? "Unknown provider"}
                   </span>
+
+                  <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] text-slate-600">
+                    {asset.asset_type}
+                  </span>
                 </div>
 
                 {asset.review_note && (
@@ -367,7 +445,7 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
                   </p>
                 )}
 
-                {asset.status === "completed" && (
+                {asset.status === "completed" && asset.asset_type === "image" && (
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       disabled={busyId === asset.asset_id}
@@ -402,6 +480,30 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
                       Open image
                     </a>
 
+                    <label className="col-span-2 text-xs font-medium text-slate-600">
+                      Motion direction
+                      <textarea
+                        value={motionPrompts[asset.asset_id] ?? ""}
+                        onChange={(event) =>
+                          setMotionPrompts((current) => ({
+                            ...current,
+                            [asset.asset_id]: event.target.value,
+                          }))
+                        }
+                        placeholder="Optional: e.g. slow push-in as the product rotates"
+                        rows={2}
+                        className="mt-1 w-full rounded-lg border border-slate-200 p-2 text-xs font-normal text-slate-700"
+                      />
+                    </label>
+
+                    <button
+                      disabled={busyId === asset.asset_id}
+                      onClick={() => void generateVideoClip(asset)}
+                      className="col-span-2 rounded-lg bg-violet-600 px-2 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-50"
+                    >
+                      Generate {clipDuration}-second AI video clip
+                    </button>
+
                     <button
                       disabled={busyId === asset.asset_id}
                       onClick={() => void deleteAsset(asset)}
@@ -412,15 +514,37 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
                   </div>
                 )}
 
-                {(asset.status === "failed") && (
-                  <div className="flex gap-2">
+                {asset.status === "completed" && asset.asset_type === "video" && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <a
+                      href={`${API_URL}${asset.file_url}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-lg border border-slate-200 px-2 py-2 text-center text-xs font-medium text-slate-600 hover:bg-slate-50"
+                    >
+                      Open video
+                    </a>
                     <button
                       disabled={busyId === asset.asset_id}
-                      onClick={() => void regenerateAsset(asset)}
-                      className="flex-1 rounded-lg bg-[#13A982] px-2 py-2 text-xs font-semibold text-white hover:bg-[#0f9270]"
+                      onClick={() => void deleteAsset(asset)}
+                      className="rounded-lg border border-red-200 px-2 py-2 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
                     >
-                      Retry generation
+                      Delete clip
                     </button>
+                  </div>
+                )}
+
+                {asset.status === "failed" && (
+                  <div className="flex gap-2">
+                    {asset.asset_type === "image" && (
+                      <button
+                        disabled={busyId === asset.asset_id}
+                        onClick={() => void regenerateAsset(asset)}
+                        className="flex-1 rounded-lg bg-[#13A982] px-2 py-2 text-xs font-semibold text-white hover:bg-[#0f9270] disabled:opacity-50"
+                      >
+                        Retry image generation
+                      </button>
+                    )}
 
                     <button
                       disabled={busyId === asset.asset_id}
@@ -460,11 +584,21 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
               ×
             </button>
 
-            <img
-              src={`${API_URL}${preview.file_url}`}
-              alt={`Scene ${preview.scene_number ?? ""}`}
-              className="max-h-[85vh] max-w-full rounded-xl object-contain"
-            />
+            {preview.asset_type === "video" ? (
+              <video
+                src={`${API_URL}${preview.file_url}`}
+                controls
+                autoPlay
+                playsInline
+                className="max-h-[85vh] max-w-full rounded-xl"
+              />
+            ) : (
+              <img
+                src={`${API_URL}${preview.file_url}`}
+                alt={`Scene ${preview.scene_number ?? ""}`}
+                className="max-h-[85vh] max-w-full rounded-xl object-contain"
+              />
+            )}
 
             <div className="mt-2 text-center text-sm text-white">
               Scene {preview.scene_number} · {preview.filename}

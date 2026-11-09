@@ -165,6 +165,24 @@ services:
       - backend
       - proxy
 
+  # Web dashboard for planning, asset generation, and final review
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+      args:
+        # This URL is used by the browser, not by containers.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    container_name: iotelligen-dashboard
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      fastapi:
+        condition: service_started
+    networks:
+      - proxy
+
 
   # PostgreSQL database with vector support
   postgres:

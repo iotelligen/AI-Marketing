@@ -83,14 +83,14 @@ When an approved scene video exists, both render paths prefer it over the source
 3. POST /videos/jobs/from-plan persists the plan as a draft VideoJob.
 4. POST /videos/jobs/{job_id}/assets/generate-from-plan creates one image asset task per scene.
 5. RQ stores the tasks in Redis; asset-worker calls FAL and saves the resulting images under the mounted asset directory.
-6. The dashboard’s asset gallery lets a person approve, reject, regenerate, or delete each image.
-7. POST /videos/jobs/{job_id}/render requires every scene to have a completed and approved image. It prepares a DynamicVideo payload and submits it to the renderer.
+6. The dashboard’s asset gallery lets a person approve, reject, regenerate, or delete each image, then create and preview FAL AI video clips from completed images.
+7. POST /videos/jobs/{job_id}/render requires every scene to have a completed and approved source image. It uses the latest completed AI clip for a scene when one exists, otherwise it renders from the approved image.
 8. The renderer queues the job in BullMQ, uses Remotion to render it, and exposes job status and the finished file.
 9. FastAPI synchronizes renderer status, creates VideoVersion records for completed renders, and proxies the finished video to the dashboard.
 
 ### Architectural boundary
 
-The dashboard is not a Docker Compose service. It is currently expected to run separately through Next.js on localhost:3000, while Compose runs the API and supporting services.
+The dashboard is a Docker Compose service built from dashboard/Dockerfile and exposed only on localhost:3000. Its browser-side API URL remains http://localhost:8000, so it correctly reaches FastAPI from the operator’s browser rather than attempting to resolve an internal Docker hostname.
 
 ## Docker services
 
@@ -103,6 +103,7 @@ The dashboard is not a Docker Compose service. It is currently expected to run s
 | n8n | Workflow automation service | Host port 127.0.0.1:5678; n8n_data volume |
 | docling | Document processing service | Internal backend network |
 | fastapi | Main API | Host port 127.0.0.1:8000; document and asset mounts |
+| dashboard | Next.js Video Studio dashboard | Host port 127.0.0.1:3000; built from dashboard/Dockerfile |
 | postgres | pgvector/pgvector:pg17 | postgres_data volume; health check |
 | redis | Redis 7 with AOF and password | redis_data volume; health check |
 | traefik | Reverse proxy | Host port 127.0.0.1:80; proxy network |
@@ -166,10 +167,10 @@ The dashboard’s main page currently:
 - Collects topic, platform, target audience, objective, duration, aspect ratio, and optional creative direction.
 - Generates a storyboard and exposes editable narration, visual prompts, on-screen text, and transitions per scene.
 - Saves the plan as a draft job.
-- Offers three explicit actions: generate scene images, review/approve assets, render approved video.
+- Offers three explicit actions: generate scene images, create/review AI clips and source-image approvals, then render the final video.
 - Polls queued/submitting/rendering jobs and displays versions plus video preview.
 
-AssetGallery supports asset filtering, image preview, approval/rejection notes, regeneration, file opening, and deletion.
+AssetGallery supports asset filtering, image and video playback, approval/rejection notes, image regeneration, FAL clip generation (4–15 seconds, default 4 seconds), file opening, and deletion. Creating a clip is confirmed in the browser because it consumes FAL credits.
 
 This is a capable production console, but it is more manual than the agreed simplified autonomous-storytelling experience.
 
@@ -216,7 +217,7 @@ Do not remove the existing asset-level audit data. Keep it available for diagnos
 - Asynchronous FAL scene-image generation via Redis/RQ exists.
 - Asset review, regeneration, and deletion exist.
 - Remotion-based asynchronous rendering exists.
-- The Next.js dashboard implements the manual storyboard-to-render workflow.
+- The Next.js dashboard runs in Docker and implements the storyboard-to-render workflow, including user-triggered FAL scene-video clip generation and inline clip playback.
 - An autonomous production endpoint now orchestrates brief → plan → scene-image generation → render and waits for final-video approval.
 - Final approval/rejection is stored against an individual VideoVersion.
 
@@ -274,18 +275,18 @@ The user runs Docker locally and verifies the results. Codex should prepare focu
 
 ### Verified starting points
 
-Compose exposes FastAPI on localhost:8000, Traefik on localhost:80, and n8n on localhost:5678. The dashboard README directs developers to run its Next.js server on localhost:3000.
+Compose exposes FastAPI on localhost:8000, the dashboard on localhost:3000, Traefik on localhost:80, and n8n on localhost:5678.
 
 ### Recommended verification sequence — run by the user
 
 1. Create or confirm the local environment configuration required by docker-compose.yml, including PostgreSQL, Redis, OpenAI, FAL, Docling, and n8n values.
 2. Build and start the Compose stack with Docker Compose.
 3. Confirm API health through GET http://localhost:8000/health and inspect health/status for PostgreSQL, Redis, asset-worker, and video-renderer.
-4. Start the dashboard from the dashboard directory using its documented Next.js development command.
+4. Open the Docker-hosted dashboard at http://localhost:3000.
 5. Submit a short, low-cost video brief through the dashboard.
 6. Verify that a valid plan is returned and saved as a draft.
-7. Generate scene assets and inspect worker logs / asset statuses. Approve all completed images.
-8. Submit rendering, confirm renderer progress, and confirm that the dashboard plays the completed video through the FastAPI endpoint.
+7. Generate scene images, approve each source image, then use the asset gallery to create one 4-second AI clip. Confirm the browser warns that FAL credits will be consumed.
+8. Wait for the clip to complete, play it inline in the gallery, then submit rendering. Confirm the dashboard plays the completed final video through the FastAPI endpoint.
 9. For any new automation work, verify both the happy path and provider failure/retry behavior without publishing externally.
 
 Before a production workflow is considered ready, add and run automated tests for the state transitions above. There is no verified current CI/test workflow to rely on.

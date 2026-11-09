@@ -823,7 +823,7 @@ const loadJobs = useCallback(async () => {
                   <div>
                     <h2 className="font-semibold text-slate-900">Production workflow</h2>
                     <p className="mt-1 text-xs text-slate-500">
-                      Save a draft, generate images, approve each scene, then render.
+                      Save a draft, generate images, optionally add AI motion clips, approve each scene, then render.
                     </p>
                   </div>
                   <div className="min-w-[240px]">
@@ -859,9 +859,9 @@ const loadJobs = useCallback(async () => {
                   <button type="button" onClick={() => setActiveSection("Video Library")}
                     disabled={!selectedJob}
                     className="rounded-lg border border-slate-200 p-4 text-left hover:border-emerald-300 hover:bg-emerald-50/30 disabled:opacity-50">
-                    <div className="text-sm font-semibold text-slate-800">2. Review and approve assets</div>
+                    <div className="text-sm font-semibold text-slate-800">2. Create clips and approve assets</div>
                     <p className="mt-1 text-xs text-slate-500">
-                      Open the asset gallery to approve or regenerate images.
+                      Open the asset gallery to generate AI clips, preview results, and approve images.
                     </p>
                   </button>
                   <button type="button" onClick={() => void renderApprovedVideo()}
@@ -871,7 +871,7 @@ const loadJobs = useCallback(async () => {
                       {renderBusy ? "Submitting render..." : "3. Render approved video"}
                     </div>
                     <p className="mt-1 text-xs text-white/80">
-                      Backend verifies that every scene has an approved image.
+                      Uses completed AI clips when available; every source image still needs approval.
                     </p>
                   </button>
                 </div>
