@@ -1,0 +1,250 @@
+services:
+  # AI Asset Generation Worker
+  asset-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    container_name: iotelligen-asset-worker
+    restart: unless-stopped
+
+    command: python -m app.workers.asset_worker
+
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+      FAL_KEY: ${FAL_KEY}
+      FAL_IMAGE_MODEL: ${FAL_IMAGE_MODEL}
+      ASSET_STORAGE: /data/assets
+
+    volumes:
+      - ./storage/assets:/data/assets
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+    networks:
+      - backend
+  # Remotion video rendering service
+  video-renderer:
+    build:
+      context: ./video-renderer
+      dockerfile: Dockerfile
+
+    container_name: iotelligen-video-renderer
+    restart: unless-stopped
+    init: true
+
+    environment:
+      PORT: 8100
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      VIDEO_OUTPUT_DIR: /data/videos
+      TZ: Europe/Oslo
+
+    volumes:
+      - video_data:/data/videos
+      - ./storage/assets:/data/assets:ro
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    networks:
+      - backend
+
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8100/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # n8n workflow automation
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: iotelligen-n8n
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:5678:5678"
+
+    environment:
+      # Database
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: ${N8N_DB_NAME}
+      DB_POSTGRESDB_USER: ${N8N_DB_USER}
+      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD}
+
+      # n8n configuration
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_EDITOR_BASE_URL: http://localhost:5678/
+      WEBHOOK_URL: http://localhost:5678/
+      N8N_SECURE_COOKIE: "false"
+
+      # Timezone
+      GENERIC_TIMEZONE: Europe/Oslo
+      TZ: Europe/Oslo
+
+      # Operational settings
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    networks:
+      - backend
+
+  #Docling
+  docling:
+    image: quay.io/docling-project/docling-serve
+    container_name: iotelligen-docling
+    restart: unless-stopped
+    networks:
+      - backend
+
+
+  # FastAPI
+  fastapi:
+    build:
+      context: ./backend
+    container_name: iotelligen-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DOCUMENT_STORAGE: /data/documents
+      MAX_UPLOAD_SIZE: 26214400
+      DOCLING_URL: ${DOCLING_URL}
+      DOCLING_TIMEOUT: ${DOCLING_TIMEOUT}
+      VIDEO_RENDERER_URL: http://video-renderer:8100
+      ASSET_STORAGE: /data/assets
+      FAL_KEY: ${FAL_KEY}
+      FAL_IMAGE_MODEL: ${FAL_IMAGE_MODEL}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    volumes:
+      - ./storage/documents:/data/documents
+      - ./storage/assets:/data/assets
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+      - proxy
+
+
+  # PostgreSQL database with vector support
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: iotelligen-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+
+    networks:
+      - backend
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  # Redis cache and message queue
+  redis:
+    image: redis:7-alpine
+    container_name: iotelligen-redis
+    restart: unless-stopped
+
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD}
+
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+    volumes:
+      - redis_data:/data
+
+    networks:
+      - backend
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'REDISCLI_AUTH="$${REDIS_PASSWORD}" redis-cli ping | grep -q PONG'
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+
+
+  # Reverse proxy
+  traefik:
+    image: traefik:v3
+    container_name: iotelligen-traefik
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:80:80"
+
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+
+    networks:
+      - proxy
+
+
+volumes:
+  postgres_data:
+  redis_data:
+  n8n_data:
+  video_data:
+networks:
+  backend:
+    driver: bridge
+
+  proxy:
+    driver: bridge

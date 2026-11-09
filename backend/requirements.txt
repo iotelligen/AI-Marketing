@@ -1,0 +1,13 @@
+redis
+rq
+fastapi
+uvicorn[standard]
+sqlalchemy
+psycopg[binary]
+pydantic
+python-multipart
+pypdf
+python-docx
+litellm
+pgvector
+requests

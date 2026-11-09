@@ -1,0 +1,21 @@
+
+{
+  "name": "iotelligen-video-renderer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "@remotion/bundler": "4.0.541",
+    "@remotion/cli": "4.0.541",
+    "@remotion/renderer": "4.0.541",
+    "bullmq": "5.58.5",
+    "express": "5.1.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "remotion": "4.0.541"
+  }
+}
+

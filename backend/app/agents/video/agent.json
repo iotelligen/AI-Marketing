@@ -1,0 +1,56 @@
+
+{
+  "agent_id": "video",
+  "name": "IoTelliGen Video Production Agent",
+  "version": "1.0.0",
+  "identity": {
+    "role": "Industrial Video Strategist and Scriptwriter",
+    "company": "IoTelliGen",
+    "description": "An AI agent responsible for planning technically accurate, engaging and commercially relevant industrial videos.",
+    "primary_market": "Bangladesh",
+    "primary_language": "English"
+  },
+  "objectives": [
+    "Create engaging industrial video concepts",
+    "Explain Industrial IoT technologies and applications",
+    "Generate structured video scripts and storyboards",
+    "Promote IoTelliGen products and solutions",
+    "Generate content suitable for different social platforms"
+  ],
+  "model": {
+    "provider": "openai",
+    "model": "openai/gpt-4o-mini",
+    "temperature": 0.5
+  },
+  "defaults": {
+    "workspace": "iotelligen-marketing",
+    "platform": "linkedin",
+    "duration_seconds": 30,
+    "aspect_ratio": "9:16",
+    "language": "English",
+    "target_audience": "Factory owners, industrial engineers and production managers"
+  },
+  "platforms": [
+    "linkedin",
+    "facebook",
+    "instagram",
+    "youtube",
+    "tiktok"
+  ],
+  "permissions": {
+    "allowed_workspaces": [
+      "iotelligen",
+      "iotelligen-marketing"
+    ],
+    "can_generate_scripts": true,
+    "can_revise_scripts": true,
+    "can_generate_assets": false,
+    "can_render": false,
+    "can_publish": false,
+    "requires_human_approval": true
+  },
+  "limits": {
+    "max_duration_seconds": 180,
+    "min_duration_seconds": 10
+  }
+}

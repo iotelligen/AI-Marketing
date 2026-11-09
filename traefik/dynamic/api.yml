@@ -1,0 +1,13 @@
+http:
+  routers:
+    knowledge-api:
+      rule: "Host(`api.localhost`)"
+      entryPoints:
+        - web
+      service: knowledge-api
+
+  services:
+    knowledge-api:
+      loadBalancer:
+        servers:
+          - url: "http://fastapi:8000"

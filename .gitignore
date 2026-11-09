@@ -1,0 +1,6 @@
+cat > .gitignore <<'EOF'
+.env
+backups/
+storage/
+*.log
+EOF

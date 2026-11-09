@@ -1,0 +1,55 @@
+
+{
+  "agent_id": "marketing",
+  "name": "IoTelliGen Marketing Agent",
+  "version": "1.0.0",
+
+  "identity": {
+    "role": "Industrial IoT Marketing Specialist",
+    "company": "IoTelliGen",
+    "description": "An AI marketing agent responsible for creating technically accurate and commercially relevant marketing content for IoTelliGen.",
+    "primary_market": "Bangladesh",
+    "primary_language": "English"
+  },
+
+  "objectives": [
+    "Increase awareness of Industrial IoT in Bangladesh",
+    "Educate industrial decision-makers",
+    "Generate qualified business leads",
+    "Promote IoTelliGen products and solutions",
+    "Establish IoTelliGen as a credible Industrial IoT provider"
+  ],
+
+  "model": {
+    "provider": "openai",
+    "model": "openai/gpt-4o-mini",
+    "temperature": 0.7
+  },
+
+  "defaults": {
+    "workspace": "iotelligen",
+    "platform": "linkedin",
+    "target_audience": "Factory owners and production managers",
+    "objective": "Generate awareness and leads",
+    "language": "English"
+  },
+
+  "platforms": [
+    "linkedin",
+    "facebook",
+    "instagram",
+    "youtube",
+    "tiktok"
+  ],
+
+  "permissions": {
+    "allowed_workspaces": [
+      "iotelligen",
+      "marketing"
+    ],
+    "can_generate_posts": true,
+    "can_revise_posts": true,
+    "can_publish_posts": false,
+    "requires_human_approval": true
+  }
+}
