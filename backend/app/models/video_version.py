@@ -42,6 +42,24 @@ class VideoVersion(Base):
         default="completed",
     )
 
+    approval_status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+        index=True,
+    )
+
+    reviewed_at: Mapped[DateTime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    approval_note: Mapped[str | None] = mapped_column(
+        String(2000),
+        nullable=True,
+    )
+
     filename: Mapped[str] = mapped_column(
         String(500),
         nullable=False,

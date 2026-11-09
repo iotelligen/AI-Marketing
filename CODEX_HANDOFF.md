@@ -40,7 +40,17 @@ The current product already contains the core of a video-production workflow:
 - Rendering is blocked until every storyboard scene has a completed, approved image.
 - A Remotion service renders the approved scene images into a video.
 
-There is no verified publishing integration, publishing API, platform credential storage, final-video approval state, or automatic publishing worker in the inspected repository.
+There is no verified publishing integration, publishing API, platform credential storage, or automatic publishing worker in the inspected repository.
+
+### Implementation update — 2026-11-09
+
+The first autonomous-production slice is now implemented locally:
+
+- POST /videos/productions accepts the existing video brief, generates a plan, queues all scene-image assets, and automatically submits rendering once every scene asset completes.
+- Autonomous scene assets are system-approved so the only required human gate is the completed video.
+- Render completion creates a video version with pending approval while keeping the existing completed job state for dashboard compatibility.
+- PATCH /videos/jobs/{job_id}/versions/{version_id}/approval records an immutable final approval or rejection on the latest completed version. The job remains completed so the existing dashboard keeps the rendered video playable.
+- Publishing remains intentionally unimplemented. A separate migration, 004_video_version_approval.sql, must be applied to existing databases.
 
 ## Current architecture
 
@@ -106,6 +116,7 @@ The router prefixes and routes below were extracted from the current sources.
 | Area | Endpoint |
 |---|---|
 | Video planning | POST /videos/plan |
+| Start autonomous production | POST /videos/productions |
 | Video-plan revision | POST /videos/plan/revise |
 | Save planned video draft | POST /videos/jobs/from-plan |
 | Submit legacy/template render job | POST /videos/jobs |
@@ -113,6 +124,7 @@ The router prefixes and routes below were extracted from the current sources.
 | Render approved plan | POST /videos/jobs/{job_id}/render |
 | List / get video jobs | GET /videos/jobs; GET /videos/jobs/{job_id} |
 | List versions / stream completed video | GET /videos/jobs/{job_id}/versions; GET /videos/jobs/{job_id}/video |
+| Final-video approval | PATCH /videos/jobs/{job_id}/versions/{version_id}/approval |
 | Request one image asset | POST /videos/jobs/{job_id}/assets/images |
 | List job assets | GET /videos/jobs/{job_id}/assets |
 | Read asset metadata or file | GET /videos/assets/{asset_id}; GET /videos/assets/{asset_id}/file |
@@ -161,9 +173,11 @@ This is a capable production console, but it is more manual than the agreed simp
 
 Relevant ORM models are Workspace, Document, DocumentChunk, MarketingPost, MarketingPostVersion, VideoJob, VideoAsset, and VideoVersion.
 
-Observed video-job progression is draft → assets_pending / assets_ready → submitting / queued / rendering → completed or failed. Exact transitions are distributed across the video router and renderer synchronization code.
+Observed video-job progression is draft → assets_pending / assets_ready → submitting / queued / rendering → completed. The latest VideoVersion then moves from pending approval to approved or rejected. Autonomous jobs start at assets_pending and advance automatically after every scene image completes. Exact transitions are distributed across the video router, asset worker, and renderer synchronization code.
 
 Image assets use generation states such as pending, generating, completed, and failed. The review state is pending, approved, or rejected. Rendering rejects a plan when a scene is missing a completed, approved image.
+
+Video versions now have approval_status, reviewed_at, and approval_note. A completed job with its latest version in pending approval is awaiting final review. The final-review API accepts approved or rejected only for that latest version.
 
 ## Required product decisions for the next implementation
 
@@ -197,10 +211,11 @@ Do not remove the existing asset-level audit data. Keep it available for diagnos
 - Asset review, regeneration, and deletion exist.
 - Remotion-based asynchronous rendering exists.
 - The Next.js dashboard implements the manual storyboard-to-render workflow.
+- An autonomous production endpoint now orchestrates brief → plan → scene-image generation → render and waits for final-video approval.
+- Final approval/rejection is stored against an individual VideoVersion.
 
 ### Verified absent or incomplete relative to the intended product
 
-- Final-video review/approval state is not present. Only individual image assets have review state.
 - Publishing to LinkedIn, Instagram, TikTok, YouTube, Facebook, or any other platform is not implemented.
 - Platform account connection, credential management, scheduling, publish retries, and publish audit records are not visible in the inspected tree.
 - Fully automatic orchestration from brief to rendered draft is not exposed as one backend job or one dashboard action.
@@ -213,7 +228,7 @@ Do not remove the existing asset-level audit data. Keep it available for diagnos
 ### Verified repository facts / direct observations
 
 - backend/app/main.py registers the documents and marketing routers twice. This should be checked before extending routing because duplicate registrations can produce duplicate route metadata and confusing OpenAPI output.
-- Database migrations 002_video_assets.sql and 003_video_asset_review.sql exist under backend/database/migrations, but Docker Compose mounts only database/init into PostgreSQL’s initialization directory. No migration runner was found in the Compose configuration. Existing databases may therefore lack the review columns unless migrations were applied manually.
+- Database migrations 002_video_assets.sql, 003_video_asset_review.sql, and 004_video_version_approval.sql exist under backend/database/migrations, but Docker Compose mounts only database/init into PostgreSQL’s initialization directory. No migration runner was found in the Compose configuration. Existing databases may therefore lack the review columns unless migrations were applied manually.
 - Base.metadata.create_all runs at API import time. That creates missing ORM tables but is not a replacement for migration management.
 - The dashboard is outside Compose, while API CORS is limited to localhost:3000 and 127.0.0.1:3000. This is compatible with local Next.js development but must be revisited for deployment.
 - The video renderer uses a separate named video_data volume, while assets are a host-mounted directory shared read-only with the renderer. FastAPI retrieves final output by proxying the renderer instead of reading that volume directly.
@@ -287,9 +302,9 @@ No GitHub write action was attempted for this handoff. To have Codex modify the 
 |---|---|
 | Composition and services | docker-compose.yml; traefik/traefik.yml; traefik/dynamic/api.yml |
 | API entry point | backend/app/main.py |
-| Video API and lifecycle | backend/app/routers/videos.py; backend/app/schemas/video_planner.py; backend/app/services/video_planner_service.py |
+| Video API and lifecycle | backend/app/routers/videos.py; backend/app/schemas/video_planner.py; backend/app/services/video_planner_service.py; backend/app/services/production_service.py |
 | Asset generation/review | backend/app/routers/asset_generation.py; backend/app/services/asset_service.py; backend/app/workers/asset_worker.py; backend/app/providers/fal/image_provider.py |
-| Data models/migrations | backend/app/models/video_job.py; backend/app/models/video_asset.py; backend/app/models/video_version.py; backend/database/migrations |
+| Data models/migrations | backend/app/models/video_job.py; backend/app/models/video_asset.py; backend/app/models/video_version.py; backend/database/migrations/004_video_version_approval.sql |
 | Renderer | video-renderer/src/server.js; video-renderer/src/compositions/DynamicVideo.tsx; video-renderer/src/compositions/IndustrialPromo.tsx; video-renderer/src/compositions/Root.tsx |
 | Dashboard | dashboard/src/app/page.tsx; dashboard/src/components/AssetGallery.tsx; dashboard/package.json |
 | Agent and brand guidance | backend/app/agents/video/agent.json; backend/app/agents/marketing/agent.json; backend/app/skills/marketing; brand-guidelines/skill.md |

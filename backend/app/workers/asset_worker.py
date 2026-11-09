@@ -1,6 +1,7 @@
 
 import logging
 import os
+from datetime import datetime, timezone
 
 from redis import Redis
 from rq import Queue, Worker
@@ -9,6 +10,7 @@ from app.database import SessionLocal
 from app.models.video_asset import VideoAsset
 from app.models.video_job import VideoJob
 from app.providers.fal.image_provider import FalImageProvider
+from app.services.production_service import advance_autonomous_production
 
 
 logging.basicConfig(level=logging.INFO)
@@ -65,9 +67,30 @@ def generate_image_asset(asset_id: str):
 
         asset.asset_metadata = metadata
 
+        video_job = db.query(VideoJob).filter(
+            VideoJob.id == asset.job_id
+        ).first()
+
+        is_autonomous = bool(
+            video_job
+            and (video_job.input_data or {}).get("production_mode")
+            == "autonomous"
+        )
+
+        if is_autonomous:
+            asset.review_status = "approved"
+            asset.reviewed_at = datetime.now(timezone.utc)
+            asset.review_note = (
+                "Automatically approved for autonomous production. "
+                "Final video approval is still required."
+            )
+
         db.commit()
 
         logger.info("Asset generation completed: %s", asset_id)
+
+        if is_autonomous:
+            advance_autonomous_production(asset.job_id)
 
         return {
             "asset_id": asset_id,
@@ -86,6 +109,17 @@ def generate_image_asset(asset_id: str):
             asset.status = "failed"
             asset.error_message = str(exc)[:4000]
             db.commit()
+
+            video_job = db.query(VideoJob).filter(
+                VideoJob.id == asset.job_id
+            ).first()
+
+            if (
+                video_job
+                and (video_job.input_data or {}).get("production_mode")
+                == "autonomous"
+            ):
+                advance_autonomous_production(asset.job_id)
 
         logger.exception("Asset generation failed: %s", asset_id)
         raise

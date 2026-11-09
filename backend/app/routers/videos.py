@@ -5,6 +5,8 @@ import urllib.error
 import urllib.request
 
 import logging
+from datetime import datetime, timezone
+from typing import Literal
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,9 @@ from app.schemas.video_planner import (
 )
 
 from app.services.asset_service import enqueue_image_generation
+from app.services.production_service import (
+    advance_autonomous_production,
+)
 
 router = APIRouter(prefix="/videos", tags=["Videos"])
 
@@ -74,6 +79,11 @@ class VideoJobFromPlan(BaseModel):
     )
 
     prompt: str | None = None
+
+
+class VideoVersionApprovalRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+    note: str | None = Field(default=None, max_length=2000)
 
 
 ASSET_STORAGE = Path(
@@ -219,6 +229,99 @@ def create_video_job_from_plan(
         "duration_seconds": plan.duration_seconds,
         "aspect_ratio": plan.aspect_ratio,
     }
+
+
+@router.post("/productions", status_code=202)
+def create_autonomous_production(
+    data: VideoPlanRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        planner_result = generate_video_plan(
+            request=data,
+            db=db,
+        )
+        plan = VideoPlan.model_validate(planner_result["plan"])
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception:
+        logger.exception("Autonomous video planning failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to create autonomous video production",
+        )
+
+    input_data = {
+        "composition_id": "DynamicVideo",
+        "title": plan.title,
+        "brand_name": "IoTelliGen",
+        "accent_color": "#16C79A",
+        "fps": 30,
+        "duration_seconds": plan.duration_seconds,
+        "aspect_ratio": plan.aspect_ratio,
+        "video_plan": plan.model_dump(),
+        "creative_brief": data.model_dump(),
+        "planner_metadata": {
+            "agent_id": planner_result["agent_id"],
+            "llm_model": planner_result["llm_model"],
+            "knowledge_sources": planner_result["knowledge_sources"],
+        },
+        "production_mode": "autonomous",
+    }
+
+    job = VideoJob(
+        title=plan.title,
+        prompt=data.topic,
+        workspace_slug=data.workspace_slug,
+        template_id="DynamicVideo",
+        input_data=input_data,
+        status="assets_pending",
+        progress=0,
+    )
+
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    queue_errors = []
+
+    for scene in plan.scenes:
+        try:
+            enqueue_image_generation(
+                job_id=job.id,
+                scene_number=scene.scene_number,
+                prompt=scene.visual_prompt,
+                aspect_ratio=plan.aspect_ratio,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Failed to queue autonomous asset generation for scene %s",
+                scene.scene_number,
+            )
+            queue_errors.append(str(exc))
+
+    if queue_errors:
+        job.status = "failed"
+        job.error_message = "Unable to queue every scene asset"
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to queue every scene asset",
+        )
+
+    advance_autonomous_production(job.id)
+
+    return {
+        "job_id": job.id,
+        "title": job.title,
+        "status": job.status,
+        "scene_count": len(plan.scenes),
+        "duration_seconds": plan.duration_seconds,
+        "requires_final_approval": True,
+    }
+
 
 @router.post("/jobs/{job_id}/assets/generate-from-plan", status_code=202)
 def generate_assets_from_plan(
@@ -551,7 +654,13 @@ def synchronize_video_job(
     if not job.renderer_job_id:
         return job
 
-    if job.status == "completed":
+    if job.status in (
+        "completed",
+        "awaiting_final_approval",
+        "approved_for_publish",
+        "revision_requested",
+        "published",
+    ):
         if job.progress != 100:
             job.progress = 100
             db.commit()
@@ -606,6 +715,7 @@ def synchronize_video_job(
                 job_id=job.id,
                 version_number=(max_version or 0) + 1,
                 status="completed",
+                approval_status="pending",
                 filename=job.output_file,
                 storage_path=f"/data/videos/{job.output_file}",
                 duration_seconds=float(
@@ -687,6 +797,80 @@ def list_video_versions(
     ).all()
 
 
+@router.patch("/jobs/{job_id}/versions/{version_id}/approval")
+def review_video_version(
+    job_id: str,
+    version_id: str,
+    data: VideoVersionApprovalRequest,
+    db: Session = Depends(get_db),
+):
+    job = db.query(VideoJob).filter(
+        VideoJob.id == job_id
+    ).first()
+
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Video job not found",
+        )
+
+    job = synchronize_video_job(job, db)
+
+    if job.status != "completed":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A completed video must be ready for final approval "
+                "before it can be reviewed"
+            ),
+        )
+
+    version = db.query(VideoVersion).filter(
+        VideoVersion.id == version_id,
+        VideoVersion.job_id == job.id,
+    ).first()
+
+    if not version:
+        raise HTTPException(
+            status_code=404,
+            detail="Video version not found",
+        )
+
+    latest_version = db.query(VideoVersion).filter(
+        VideoVersion.job_id == job.id,
+    ).order_by(
+        VideoVersion.version_number.desc()
+    ).first()
+
+    if not latest_version or latest_version.id != version.id:
+        raise HTTPException(
+            status_code=409,
+            detail="Only the latest video version can be approved",
+        )
+
+    if version.approval_status != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail="Video version has already received final review",
+        )
+
+    version.approval_status = data.decision
+    version.reviewed_at = datetime.now(timezone.utc)
+    version.approval_note = data.note
+    db.commit()
+    db.refresh(version)
+
+    return {
+        "job_id": job.id,
+        "job_status": job.status,
+        "version_id": version.id,
+        "version_number": version.version_number,
+        "approval_status": version.approval_status,
+        "reviewed_at": version.reviewed_at,
+        "approval_note": version.approval_note,
+    }
+
+
 @router.get("/jobs/{job_id}/video")
 def stream_video(
     job_id: str,
@@ -704,7 +888,9 @@ def stream_video(
 
     job = synchronize_video_job(job, db)
 
-    if job.status != "completed":
+    if job.status not in (
+        "completed",
+    ):
         raise HTTPException(
             status_code=409,
             detail=f"Video is not ready. Current status: {job.status}",
