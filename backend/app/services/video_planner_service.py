@@ -8,6 +8,7 @@ from litellm import completion
 from pydantic import ValidationError
 
 from app.schemas.video_planner import (
+    VideoFormat,
     VideoPlan,
     VideoPlanRequest,
 )
@@ -15,7 +16,11 @@ from app.services.agent_config_service import (
     load_agent_config,
     get_agent_model,
 )
+from app.services.brand_service import brand_facts_for_prompt
+from app.services.llm_json import complete_json, strip_code_fences
 from app.services.marketing_service import retrieve_knowledge
+from app.services.skill_service import load_marketing_skills
+from app.services.video_format_service import generate_video_format
 
 
 logger = logging.getLogger(__name__)
@@ -23,6 +28,15 @@ logger = logging.getLogger(__name__)
 VIDEO_AGENT_ID = "video"
 
 VIDEO_TOP_K = int(os.getenv("VIDEO_TOP_K", "5"))
+
+# The scriptwriter needs the skills that govern wording and accuracy.
+# Structure is the format agent's job.
+SCRIPT_SKILLS = (
+    "brand_guidelines",
+    "platform",
+    "technical_content",
+    "storytelling",
+)
 
 
 def get_video_agent_config():
@@ -62,10 +76,73 @@ def parse_video_plan(raw_content: str) -> VideoPlan:
         ) from exc
 
 
+def parse_script(
+    raw_content: str,
+    video_format: VideoFormat,
+    request: VideoPlanRequest,
+) -> VideoPlan:
+    """
+    Turn the scriptwriter's answer into a storyboard.
+
+    Everything the format agent or the user already decided (scene
+    order, beat, timing, duration, aspect ratio) is written from those
+    sources rather than trusted from the scriptwriter's answer.
+    """
+    if not raw_content:
+        raise ValueError("Video Agent returned empty content")
+
+    try:
+        data = json.loads(strip_code_fences(raw_content))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "Video Agent returned invalid JSON"
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise ValueError("Video Agent must return a JSON object")
+
+    scenes = data.get("scenes")
+    beats = video_format.beats
+
+    if not isinstance(scenes, list) or len(scenes) != len(beats):
+        found = len(scenes) if isinstance(scenes, list) else 0
+
+        raise ValueError(
+            f"The storyboard must contain exactly {len(beats)} scenes, "
+            f"one per beat and in beat order. It contained {found}."
+        )
+
+    for index, (scene, beat) in enumerate(zip(scenes, beats), start=1):
+        if not isinstance(scene, dict):
+            raise ValueError(f"Scene {index} must be a JSON object")
+
+        scene["scene_number"] = index
+        scene["beat"] = beat.beat
+        scene["duration_seconds"] = beat.duration_seconds
+        scene["purpose"] = beat.goal
+
+    data["duration_seconds"] = request.duration_seconds
+    data["aspect_ratio"] = request.aspect_ratio
+    data["language"] = request.language
+    data["target_audience"] = request.target_audience
+    data["objective"] = request.objective
+
+    try:
+        return VideoPlan.model_validate(data)
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid storyboard returned by Video Agent: {exc}"
+        ) from exc
+
+
 def generate_video_plan(
     request: VideoPlanRequest,
     db,
 ) -> dict:
+    """
+    Plan a video in two steps: the format agent decides the beat
+    sheet, then the video agent writes a scene for every beat.
+    """
     config = get_video_agent_config()
 
     permissions = config.get("permissions", {})
@@ -110,6 +187,45 @@ def generate_video_plan(
             "customer claims, certifications or performance figures."
         )
 
+    # Step 1: structure. A caller may supply its own beat sheet.
+    if request.video_format is not None:
+        video_format = request.video_format
+
+        if video_format.duration_seconds != request.duration_seconds:
+            raise ValueError(
+                "The supplied video format lasts "
+                f"{video_format.duration_seconds}s, but the requested "
+                f"duration is {request.duration_seconds}s"
+            )
+
+        format_agent = None
+    else:
+        format_result = generate_video_format(request)
+
+        video_format = VideoFormat.model_validate(
+            format_result["format"]
+        )
+
+        format_agent = {
+            "agent_id": format_result["agent_id"],
+            "llm_model": format_result["llm_model"],
+        }
+
+    beat_sheet = "\n".join(
+        f"{index}. {beat.beat} ({beat.duration_seconds}s): {beat.goal}"
+        for index, beat in enumerate(video_format.beats, start=1)
+    )
+
+    # Step 2: script and visuals for each beat.
+    skills = load_marketing_skills(request.platform)
+
+    skill_context = "\n\n".join(
+        f"### {name.replace('_', ' ').title()}\n{skills[name]}"
+        for name in SCRIPT_SKILLS
+    )
+
+    brand_facts = brand_facts_for_prompt(db, request.workspace_slug)
+
     system_prompt = f"""
 You are {config['name']}.
 
@@ -128,24 +244,45 @@ Primary market:
 Primary language:
 {identity['primary_language']}
 
-VIDEO PLANNING RULES:
+A format strategist has already decided the structure of this video.
+Your job is to write the script and the visuals for each beat. You
+cannot add, remove, reorder or retime beats.
 
-1. Create a professional industrial video storyboard.
-2. Write clear and natural narration.
-3. Make every scene visually meaningful.
-4. Use concise on-screen text suitable for video.
-5. Every scene must have a visual_prompt that can later
-   be used by an image or video generation model.
-6. Make the video engaging from the opening scene.
-7. Include a suitable call to action.
-8. Respect the requested duration exactly.
-9. Scene durations must add up to the total video duration.
-10. Scene numbers must start at 1 and be sequential.
-11. Never invent IoTelliGen product specifications,
-    customer names, results or certifications.
-12. Distinguish verified company facts from general
+BEAT SHEET ({video_format.format_name}):
+{beat_sheet}
+
+SCRIPT RULES:
+
+1. Write exactly one scene per beat, in the order of the beat sheet.
+2. Each scene must achieve the goal of its beat.
+3. Write clear and natural narration that can be spoken within the
+   beat's duration: at most about 2.5 words per second.
+4. Keep on_screen_text to 8 words or fewer.
+5. Make the opening scene engaging.
+6. Every visual_prompt describes one photorealistic scene for an
+   image generation model, and may later drive a video model.
+   Never ask for text, captions, numbers, logos, brand names,
+   watermarks or software screenshots in the image. Image models
+   draw them badly, and the renderer adds the logo and text itself.
+7. The "cta" scene is rendered as a branded end card. The logo and
+   the contact details are added automatically from the company's
+   stored brand profile. For that scene, write a short call to
+   action as on_screen_text, and a visual_prompt for a calm, dark,
+   uncluttered background.
+8. Never write phone numbers, email addresses, web addresses or
+   street addresses anywhere in the storyboard.
+9. Never invent {identity['company']} product specifications,
+   customer names, results or certifications.
+10. Distinguish verified company facts from general
     industrial knowledge.
-13. Return valid JSON only. Do not use Markdown fences.
+11. transition must be one of: cut, fade, slide, zoom, dissolve.
+12. Return valid JSON only. Do not use Markdown fences.
+
+BRAND:
+{brand_facts}
+
+SKILLS:
+{skill_context}
 
 COMPANY KNOWLEDGE:
 {knowledge_context}
@@ -155,17 +292,10 @@ Required JSON structure:
 {{
   "concept": "Video concept",
   "title": "Video title",
-  "duration_seconds": 30,
-  "aspect_ratio": "9:16",
-  "language": "English",
-  "target_audience": "Factory owners",
-  "objective": "Generate awareness",
-  "cta": "Contact IoTelliGen",
+  "cta": "Short call to action",
   "scenes": [
     {{
-      "scene_number": 1,
-      "duration_seconds": 5,
-      "purpose": "Hook",
+      "beat": "hook",
       "narration": "Narration text",
       "visual_prompt": "Detailed visual description",
       "on_screen_text": "Short text",
@@ -203,33 +333,25 @@ TONE:
 ADDITIONAL INSTRUCTIONS:
 {request.additional_instructions or "None"}
 
-Generate the complete storyboard.
+Write the storyboard for the beat sheet.
 """
 
-    response = completion(
+    plan = complete_json(
         model=model,
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": user_prompt,
-            },
-        ],
         temperature=temperature,
-        response_format={"type": "json_object"},
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        parse=lambda raw: parse_script(raw, video_format, request),
+        agent_label="Video Agent",
     )
-
-    raw_content = response.choices[0].message.content
-
-    plan = parse_video_plan(raw_content)
 
     return {
         "plan": plan.model_dump(),
+        "format": video_format.model_dump(),
         "llm_model": model,
         "agent_id": VIDEO_AGENT_ID,
+        "format_agent": format_agent,
+        "skills_used": list(SCRIPT_SKILLS),
         "knowledge_sources": sources,
         "requires_human_approval": True,
     }
@@ -296,6 +418,12 @@ Rules:
    or performance figures.
 7. Return the complete revised storyboard as valid JSON only.
 8. Follow the same JSON structure as the supplied storyboard.
+9. When scenes carry a "beat" value, every scene must keep one.
+   Allowed beats are hook, pain_point, consequence, solution,
+   benefit and cta. The first scene must be the only "hook" and
+   the last scene must be the only "cta".
+10. Never write phone numbers, email addresses or web addresses.
+    The renderer adds contact details to the "cta" scene.
 """
 
     user_prompt = f"""

@@ -23,6 +23,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers.asset_generation import router as asset_generation_router
 
+from app.models.brand_profile import BrandProfile
+from app.routers.brand import router as brand_router
+
 # Initial prototype: create tables automatically.
 Base.metadata.create_all(bind=engine)
 
@@ -51,6 +54,7 @@ app.include_router(documents_router)
 app.include_router(marketing_router)
 app.include_router(videos_router)
 app.include_router(asset_generation_router)
+app.include_router(brand_router)
 
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=2, max_length=150)

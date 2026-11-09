@@ -15,6 +15,15 @@ export type DynamicScene = {
   duration_seconds: number;
   visual_type: "image" | "video";
   src: string;
+  // The "cta" beat is drawn as the branded end card.
+  beat?:
+    | "hook"
+    | "pain_point"
+    | "consequence"
+    | "solution"
+    | "benefit"
+    | "cta"
+    | null;
   narration?: string;
   on_screen_text?: string;
   transition?: "cut" | "fade" | "slide" | "zoom" | "dissolve";
@@ -28,10 +37,22 @@ export type DynamicScene = {
   };
 };
 
+// Verified brand facts from the stored brand profile. They are drawn
+// by the renderer so they are never left to an image model.
+export type DynamicBrand = {
+  name: string;
+  tagline?: string;
+  website?: string;
+  email?: string;
+  phone?: string;
+  logo_src?: string | null;
+};
+
 export type DynamicVideoProps = {
   title: string;
   brand_name: string;
   accent_color: string;
+  brand?: DynamicBrand;
   fps: number;
   width: number;
   height: number;
@@ -39,10 +60,163 @@ export type DynamicVideoProps = {
   scenes: DynamicScene[];
 };
 
+// A light plate keeps a logo legible on any photo or clip.
+const LogoWatermark: React.FC<{ src: string }> = ({ src }) => (
+  <div
+    style={{
+      position: "absolute",
+      top: 56,
+      left: 56,
+      backgroundColor: "rgba(255,255,255,0.92)",
+      borderRadius: 18,
+      padding: "14px 20px",
+    }}
+  >
+    <Img
+      src={src}
+      style={{
+        display: "block",
+        height: 64,
+        width: "auto",
+        maxWidth: 260,
+        objectFit: "contain",
+      }}
+    />
+  </div>
+);
+
+const EndCard: React.FC<{
+  scene: DynamicScene;
+  brand?: DynamicBrand;
+  brandName: string;
+  accentColor: string;
+}> = ({ scene, brand, brandName, accentColor }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  const appear = interpolate(frame, [0, Math.round(fps * 0.5)], [0, 1], {
+    extrapolateLeft: "clamp",
+    extrapolateRight: "clamp",
+  });
+
+  const contactLines = [brand?.website, brand?.phone, brand?.email].filter(
+    (line): line is string => Boolean(line)
+  );
+
+  return (
+    <AbsoluteFill
+      style={{
+        backgroundColor: "rgba(7,21,34,0.8)",
+        justifyContent: "center",
+        alignItems: "center",
+        padding: 90,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          textAlign: "center",
+          maxWidth: "100%",
+          fontFamily: "Arial, sans-serif",
+          color: "white",
+          opacity: appear,
+          transform: `translateY(${interpolate(appear, [0, 1], [30, 0])}px)`,
+        }}
+      >
+        {brand?.logo_src ? (
+          <div
+            style={{
+              backgroundColor: "rgba(255,255,255,0.96)",
+              borderRadius: 28,
+              padding: "28px 40px",
+              marginBottom: 50,
+            }}
+          >
+            <Img
+              src={brand.logo_src}
+              style={{
+                display: "block",
+                height: 180,
+                width: "auto",
+                maxWidth: 560,
+                objectFit: "contain",
+              }}
+            />
+          </div>
+        ) : (
+          <div
+            style={{
+              fontSize: 84,
+              lineHeight: 1.1,
+              fontWeight: 800,
+              marginBottom: 40,
+            }}
+          >
+            {brandName}
+          </div>
+        )}
+
+        {brand?.tagline && (
+          <div
+            style={{
+              fontSize: 36,
+              lineHeight: 1.3,
+              color: "rgba(255,255,255,0.8)",
+              marginBottom: 46,
+            }}
+          >
+            {brand.tagline}
+          </div>
+        )}
+
+        {scene.on_screen_text && (
+          <div
+            style={{
+              fontSize: 64,
+              lineHeight: 1.15,
+              fontWeight: 800,
+              marginBottom: 36,
+            }}
+          >
+            {scene.on_screen_text}
+          </div>
+        )}
+
+        <div
+          style={{
+            width: 120,
+            height: 7,
+            backgroundColor: accentColor,
+            borderRadius: 5,
+            marginBottom: contactLines.length > 0 ? 40 : 0,
+          }}
+        />
+
+        {contactLines.map((line) => (
+          <div
+            key={line}
+            style={{
+              fontSize: 40,
+              lineHeight: 1.5,
+              fontWeight: 600,
+            }}
+          >
+            {line}
+          </div>
+        ))}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
 const Scene: React.FC<{
   scene: DynamicScene;
   accentColor: string;
-}> = ({ scene, accentColor }) => {
+  brand?: DynamicBrand;
+  brandName: string;
+}> = ({ scene, accentColor, brand, brandName }) => {
   const frame = useCurrentFrame();
   const { durationInFrames } = useVideoConfig();
 
@@ -125,40 +299,53 @@ const Scene: React.FC<{
         )}
       </AbsoluteFill>
 
-      <AbsoluteFill
-        style={{
-          background:
-            "linear-gradient(180deg, rgba(0,0,0,0.05) 35%, rgba(0,0,0,0.72) 100%)",
-          justifyContent: "flex-end",
-          padding: 80,
-        }}
-      >
-        {scene.on_screen_text && (
-          <div
+      {scene.beat === "cta" ? (
+        <EndCard
+          scene={scene}
+          brand={brand}
+          brandName={brandName}
+          accentColor={accentColor}
+        />
+      ) : (
+        <>
+          <AbsoluteFill
             style={{
-              color: "white",
-              fontFamily: "Arial, sans-serif",
-              fontSize: 68,
-              lineHeight: 1.15,
-              fontWeight: 800,
-              maxWidth: "90%",
-              marginBottom: 35,
-              textShadow: "0 3px 15px rgba(0,0,0,0.5)",
+              background:
+                "linear-gradient(180deg, rgba(0,0,0,0.05) 35%, rgba(0,0,0,0.72) 100%)",
+              justifyContent: "flex-end",
+              padding: 80,
             }}
           >
-            {scene.on_screen_text}
-          </div>
-        )}
+            {scene.on_screen_text && (
+              <div
+                style={{
+                  color: "white",
+                  fontFamily: "Arial, sans-serif",
+                  fontSize: 68,
+                  lineHeight: 1.15,
+                  fontWeight: 800,
+                  maxWidth: "90%",
+                  marginBottom: 35,
+                  textShadow: "0 3px 15px rgba(0,0,0,0.5)",
+                }}
+              >
+                {scene.on_screen_text}
+              </div>
+            )}
 
-        <div
-          style={{
-            width: 100,
-            height: 7,
-            backgroundColor: accentColor,
-            borderRadius: 5,
-          }}
-        />
-      </AbsoluteFill>
+            <div
+              style={{
+                width: 100,
+                height: 7,
+                backgroundColor: accentColor,
+                borderRadius: 5,
+              }}
+            />
+          </AbsoluteFill>
+
+          {brand?.logo_src && <LogoWatermark src={brand.logo_src} />}
+        </>
+      )}
     </AbsoluteFill>
   );
 };
@@ -166,6 +353,8 @@ const Scene: React.FC<{
 export const DynamicVideo: React.FC<DynamicVideoProps> = ({
   scenes,
   accent_color,
+  brand,
+  brand_name,
 }) => {
   let currentFrame = 0;
   const { fps } = useVideoConfig();
@@ -184,7 +373,12 @@ export const DynamicVideo: React.FC<DynamicVideoProps> = ({
             from={from}
             durationInFrames={durationInFrames}
           >
-            <Scene scene={scene} accentColor={accent_color} />
+            <Scene
+              scene={scene}
+              accentColor={accent_color}
+              brand={brand}
+              brandName={brand?.name || brand_name}
+            />
           </Sequence>
         );
       })}

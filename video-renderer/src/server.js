@@ -76,6 +76,86 @@ function validateRequest(body) {
   return values;
 }
 
+const SCENE_BEATS = [
+  "hook",
+  "pain_point",
+  "consequence",
+  "solution",
+  "benefit",
+  "cta"
+];
+
+function brandText(value, label) {
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+
+  if (typeof value !== "string" || value.length > 200) {
+    throw new Error(`Invalid brand ${label}`);
+  }
+
+  return value;
+}
+
+// The brand block is optional so manifests without one still render.
+async function validateBrand(body, assetRoot) {
+  const brand = body.brand ?? {};
+
+  if (typeof brand !== "object" || Array.isArray(brand)) {
+    throw new Error("Invalid brand");
+  }
+
+  let logoSrc = null;
+
+  if (brand.logo_path !== undefined && brand.logo_path !== null) {
+    if (typeof brand.logo_path !== "string") {
+      throw new Error("Invalid brand logo path");
+    }
+
+    const realLogoPath = await fs.realpath(brand.logo_path);
+    const relativePath = path.relative(assetRoot, realLogoPath);
+
+    if (
+      !relativePath ||
+      relativePath.startsWith("..") ||
+      path.isAbsolute(relativePath)
+    ) {
+      throw new Error("Brand logo is outside the asset storage directory");
+    }
+
+    const extension = path.extname(realLogoPath).toLowerCase();
+
+    if (![".jpg", ".jpeg", ".png", ".webp"].includes(extension)) {
+      throw new Error("Unsupported brand logo format");
+    }
+
+    const stat = await fs.stat(realLogoPath);
+
+    if (!stat.isFile()) {
+      throw new Error("Brand logo path is not a file");
+    }
+
+    const encodedPath = relativePath
+      .split(path.sep)
+      .map(encodeURIComponent)
+      .join("/");
+
+    logoSrc = `http://127.0.0.1:${PORT}/assets/${encodedPath}`;
+  }
+
+  return {
+    name:
+      brandText(brand.name, "name") ||
+      brandText(body.brand_name, "name") ||
+      "IoTelliGen",
+    tagline: brandText(brand.tagline, "tagline"),
+    website: brandText(brand.website, "website"),
+    email: brandText(brand.email, "email"),
+    phone: brandText(brand.phone, "phone"),
+    logo_src: logoSrc
+  };
+}
+
 async function validateDynamicManifest(body) {
   if (!body || body.composition_id !== "DynamicVideo") {
     throw new Error("Invalid composition_id");
@@ -192,6 +272,7 @@ async function validateDynamicManifest(body) {
       duration_seconds: scene.duration_seconds,
       visual_type: scene.visual_type,
       src: `http://127.0.0.1:${PORT}/assets/${encodedPath}`,
+      beat: SCENE_BEATS.includes(scene.beat) ? scene.beat : null,
       narration: scene.narration || "",
       on_screen_text: scene.on_screen_text || "",
       transition: scene.transition || "fade",
@@ -207,11 +288,23 @@ async function validateDynamicManifest(body) {
     );
   }
 
+  const accentColor = body.accent_color || "#16C79A";
+
+  if (
+    typeof accentColor !== "string" ||
+    !/^#[0-9a-fA-F]{6}$/.test(accentColor)
+  ) {
+    throw new Error("Invalid accent_color. Expected #RRGGBB.");
+  }
+
+  const brand = await validateBrand(body, assetRoot);
+
   return {
     composition_id: "DynamicVideo",
     title: body.title || "Industrial Video",
-    brand_name: body.brand_name || "IoTelliGen",
-    accent_color: body.accent_color || "#16C79A",
+    brand_name: brand.name,
+    accent_color: accentColor,
+    brand,
     fps,
     width,
     height,
@@ -440,7 +533,13 @@ async function shutdown() {
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
 
-startRenderer().catch((error) => {
-  console.error("Renderer startup failed:", error);
-  process.exit(1);
-});
+export { validateDynamicManifest };
+
+// Tests import this file for the validator and set this flag so the
+// queue, worker and HTTP server are not started.
+if (process.env.RENDERER_SKIP_STARTUP !== "1") {
+  startRenderer().catch((error) => {
+    console.error("Renderer startup failed:", error);
+    process.exit(1);
+  });
+}

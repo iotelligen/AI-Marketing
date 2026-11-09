@@ -43,6 +43,8 @@ from app.schemas.video_planner import (
 )
 
 from app.services.asset_service import enqueue_image_generation
+from app.services.brand_service import build_render_brand
+from app.services.video_format_service import generate_video_format
 from app.services.production_service import (
     advance_autonomous_production,
 )
@@ -262,6 +264,7 @@ def create_autonomous_production(
         "duration_seconds": plan.duration_seconds,
         "aspect_ratio": plan.aspect_ratio,
         "video_plan": plan.model_dump(),
+        "video_format": planner_result.get("format"),
         "creative_brief": data.model_dump(),
         "planner_metadata": {
             "agent_id": planner_result["agent_id"],
@@ -521,6 +524,7 @@ def render_video_job(
             "duration_seconds": scene.duration_seconds,
             "visual_type": asset.asset_type,
             "asset_path": str(asset_path),
+            "beat": scene.beat,
             "narration": scene.narration,
             "on_screen_text": scene.on_screen_text,
             "transition": scene.transition,
@@ -541,11 +545,14 @@ def render_video_job(
             },
         )
 
+    brand = build_render_brand(db, job.workspace_slug)
+
     manifest = {
         "composition_id": "DynamicVideo",
         "title": plan.title,
-        "brand_name": "IoTelliGen",
-        "accent_color": "#16C79A",
+        "brand_name": brand["name"],
+        "accent_color": brand["accent_color"],
+        "brand": brand,
         "fps": 30,
         "width": width,
         "height": height,
@@ -591,6 +598,38 @@ def render_video_job(
 # ---------------------------------------------------------
 # AI Video Planner
 # ---------------------------------------------------------
+
+@router.post("/format")
+def create_video_format(
+    data: VideoPlanRequest,
+):
+    """
+    Run only the format agent. The returned beat sheet can be edited
+    and sent back to /videos/plan as "video_format".
+    """
+    try:
+        return generate_video_format(data)
+
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail=str(exc),
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        )
+
+    except Exception:
+        logger.exception("Video format generation failed")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to generate video format",
+        )
+
 
 @router.post("/plan")
 def create_video_plan(

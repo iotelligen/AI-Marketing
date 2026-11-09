@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import AssetGallery from "@/components/AssetGallery";
+import BrandSettings from "@/components/BrandSettings";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -33,9 +34,28 @@ type VideoVersion = {
   status: string;
 };
 
+type SceneBeat =
+  | "hook"
+  | "pain_point"
+  | "consequence"
+  | "solution"
+  | "benefit"
+  | "cta";
+
+const BEAT_LABELS: Record<SceneBeat, string> = {
+  hook: "Hook",
+  pain_point: "Pain point",
+  consequence: "Consequence",
+  solution: "Solution",
+  benefit: "Benefit",
+  cta: "Call to action",
+};
+
 type VideoScene = {
   scene_number: number;
   duration_seconds: number;
+  // Set by the format agent. Missing on storyboards saved before beats.
+  beat?: SceneBeat | null;
   purpose: string;
   narration: string;
   visual_prompt: string;
@@ -60,6 +80,7 @@ const navigation = [
   { label: "Overview", icon: "◫" },
   { label: "Video Studio", icon: "▣" },
   { label: "Video Library", icon: "▤" },
+  { label: "Brand", icon: "◉" },
   { label: "Marketing", icon: "◈" },
   { label: "Knowledge Base", icon: "▧" },
   { label: "Workflows", icon: "⌘" },
@@ -756,12 +777,25 @@ const loadJobs = useCallback(async () => {
                       {videoPlan.scenes.map((scene) => (
                         <article key={scene.scene_number}
                           className="space-y-3 rounded-xl border border-slate-200 p-4">
-                          <div className="flex items-center justify-between">
-                            <h3 className="font-semibold text-slate-800">
-                              Scene {scene.scene_number} · {scene.purpose}
-                            </h3>
-                            <span className="text-xs text-slate-400">{scene.duration_seconds}s</span>
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              {scene.beat && (
+                                <span className="mb-1 inline-block rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
+                                  {BEAT_LABELS[scene.beat]}
+                                </span>
+                              )}
+                              <h3 className="font-semibold text-slate-800">
+                                Scene {scene.scene_number} · {scene.purpose}
+                              </h3>
+                            </div>
+                            <span className="shrink-0 text-xs text-slate-400">{scene.duration_seconds}s</span>
                           </div>
+                          {scene.beat === "cta" && (
+                            <p className="rounded-lg bg-slate-50 p-3 text-xs text-slate-500">
+                              Rendered as the branded end card. The logo and contact details come
+                              from the Brand section, and the image is used only as a background.
+                            </p>
+                          )}
                           <FormField label="Narration">
                             <textarea rows={2} value={scene.narration}
                               onChange={(e) => updateScene(scene.scene_number, "narration", e.target.value)}
@@ -933,11 +967,15 @@ const loadJobs = useCallback(async () => {
             </section>
           )}
 
+          {/* Brand */}
+          {activeSection === "Brand" && <BrandSettings />}
+
           {/* Placeholder sections */}
           {![
             "Overview",
             "Video Studio",
             "Video Library",
+            "Brand",
           ].includes(activeSection) && (
             <section className="rounded-xl border border-[#E5EAF0] bg-white p-10 text-center">
               <div className="text-3xl text-slate-300">◈</div>

@@ -10,6 +10,7 @@ from app.database import SessionLocal
 from app.models.video_asset import VideoAsset
 from app.models.video_job import VideoJob
 from app.schemas.video_planner import VideoPlan
+from app.services.brand_service import build_render_brand
 
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,7 @@ def build_render_manifest(job: VideoJob, db) -> dict:
             "duration_seconds": scene.duration_seconds,
             "visual_type": asset.asset_type,
             "asset_path": str(asset_path),
+            "beat": scene.beat,
             "narration": scene.narration,
             "on_screen_text": scene.on_screen_text,
             "transition": scene.transition,
@@ -133,11 +135,14 @@ def build_render_manifest(job: VideoJob, db) -> dict:
             },
         })
 
+    brand = build_render_brand(db, job.workspace_slug)
+
     return {
         "composition_id": "DynamicVideo",
         "title": plan.title,
-        "brand_name": "IoTelliGen",
-        "accent_color": "#16C79A",
+        "brand_name": brand["name"],
+        "accent_color": brand["accent_color"],
+        "brand": brand,
         "fps": 30,
         "width": width,
         "height": height,
