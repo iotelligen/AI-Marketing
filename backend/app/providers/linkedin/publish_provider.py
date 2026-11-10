@@ -48,6 +48,26 @@ class LinkedInPublishProvider:
             "X-Restli-Protocol-Version": "2.0.0",
         })
 
+    def publish_text(
+        self,
+        *,
+        text: str,
+    ) -> dict[str, Any]:
+        commentary = (text or "").strip()
+
+        if not commentary:
+            raise LinkedInPublishError("Post text is empty")
+
+        post_urn = self._create_text_ugc_post(text=commentary)
+
+        return {
+            "provider": "linkedin",
+            "remote_post_id": post_urn,
+            "remote_url": None,
+            "author_urn": self.author_urn,
+            "content_type": "text",
+        }
+
     def publish_video(
         self,
         *,
@@ -80,6 +100,7 @@ class LinkedInPublishProvider:
             "remote_url": None,
             "video_urn": video_urn,
             "author_urn": self.author_urn,
+            "content_type": "video",
         }
 
     def _initialize_and_upload(
@@ -193,6 +214,34 @@ class LinkedInPublishProvider:
 
         return video_urn
 
+    def _create_text_ugc_post(self, *, text: str) -> str:
+        url = f"{self.API_BASE}/v2/ugcPosts"
+        payload = {
+            "author": self.author_urn,
+            "lifecycleState": "PUBLISHED",
+            "specificContent": {
+                "com.linkedin.ugc.ShareContent": {
+                    "shareCommentary": {
+                        "text": text[:3000],
+                    },
+                    "shareMediaCategory": "NONE",
+                }
+            },
+            "visibility": {
+                "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC",
+            },
+        }
+
+        response = self.session.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=60,
+        )
+        self._raise_for_status(response, "create text UGC post")
+
+        return self._extract_post_urn(response)
+
     def _create_ugc_post(
         self,
         *,
@@ -239,6 +288,10 @@ class LinkedInPublishProvider:
         )
         self._raise_for_status(response, "create UGC post")
 
+        return self._extract_post_urn(response)
+
+    @staticmethod
+    def _extract_post_urn(response: requests.Response) -> str:
         post_urn = response.headers.get("x-restli-id") or response.json().get(
             "id"
         )

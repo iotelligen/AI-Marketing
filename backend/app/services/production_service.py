@@ -121,7 +121,32 @@ def build_render_manifest(job: VideoJob, db) -> dict:
                 f"Asset file is missing for scene {scene.scene_number}"
             )
 
-        scenes.append({
+        audio_asset = db.query(VideoAsset).filter(
+            VideoAsset.job_id == job.id,
+            VideoAsset.scene_number == scene.scene_number,
+            VideoAsset.asset_type == "audio",
+            VideoAsset.status == "completed",
+            VideoAsset.review_status == "approved",
+        ).order_by(
+            VideoAsset.created_at.desc()
+        ).first()
+
+        audio_path = None
+
+        if audio_asset and audio_asset.storage_path:
+            candidate = Path(audio_asset.storage_path).resolve()
+
+            try:
+                candidate.relative_to(ASSET_STORAGE)
+            except ValueError as exc:
+                raise ProductionRenderError(
+                    f"Invalid audio path for scene {scene.scene_number}"
+                ) from exc
+
+            if candidate.is_file():
+                audio_path = str(candidate)
+
+        scene_payload = {
             "scene_number": scene.scene_number,
             "duration_seconds": scene.duration_seconds,
             "visual_type": asset.asset_type,
@@ -133,7 +158,12 @@ def build_render_manifest(job: VideoJob, db) -> dict:
             "animation": {
                 "type": "slow_zoom_in",
             },
-        })
+        }
+
+        if audio_path:
+            scene_payload["audio_path"] = audio_path
+
+        scenes.append(scene_payload)
 
     brand = build_render_brand(db, job.workspace_slug)
 

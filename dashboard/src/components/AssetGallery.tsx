@@ -231,6 +231,10 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
     (asset) => asset.asset_type === "video"
   ).length;
 
+  const audioCount = assets.filter(
+    (asset) => asset.asset_type === "audio" && asset.status === "completed"
+  ).length;
+
   if (!jobId) {
     return (
       <section className="rounded-xl border border-[#E5EAF0] bg-white p-8 text-center">
@@ -250,7 +254,8 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
             Generated assets
           </h2>
           <p className="mt-1 text-xs text-slate-500">
-            Review scene images, create AI motion clips, and preview their results.
+            Review scene images, voiceover, and AI motion clips.
+            Completed narrations: {audioCount}.
           </p>
         </div>
 
@@ -376,6 +381,18 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
                       preload="metadata"
                       className="h-full w-full bg-black object-cover"
                     />
+                  ) : asset.asset_type === "audio" ? (
+                    <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-slate-900 p-4">
+                      <div className="text-xs font-medium uppercase tracking-wide text-slate-300">
+                        Voiceover
+                      </div>
+                      <audio
+                        src={`${API_URL}${asset.file_url}`}
+                        controls
+                        preload="metadata"
+                        className="w-full"
+                      />
+                    </div>
                   ) : (
                     <button
                       onClick={() => setPreview(asset)}
@@ -395,7 +412,9 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
                       ? "Generation failed"
                       : asset.asset_type === "video"
                         ? "AI video clip is being generated"
-                        : "Image is being generated"}
+                        : asset.asset_type === "audio"
+                          ? "Voiceover is being generated"
+                          : "Image is being generated"}
                     <div className="mt-2 text-xs">
                       {asset.status}
                     </div>
@@ -406,7 +425,11 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
               <div className="space-y-3 p-4">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-sm font-semibold text-slate-800">
-                    {asset.asset_type === "video" ? "AI video clip" : "Scene"}{" "}
+                    {asset.asset_type === "video"
+                      ? "AI video clip"
+                      : asset.asset_type === "audio"
+                        ? "Voiceover"
+                        : "Scene"}{" "}
                     {asset.scene_number ?? "—"}
                   </div>
 
@@ -534,15 +557,36 @@ export default function AssetGallery({ jobId }: AssetGalleryProps) {
                   </div>
                 )}
 
+                {asset.status === "completed" && asset.asset_type === "audio" && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      disabled={busyId === asset.asset_id}
+                      onClick={() => void regenerateAsset(asset)}
+                      className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                    >
+                      Regenerate
+                    </button>
+                    <button
+                      disabled={busyId === asset.asset_id}
+                      onClick={() => void deleteAsset(asset)}
+                      className="rounded-lg border border-red-200 px-2 py-2 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      Delete audio
+                    </button>
+                  </div>
+                )}
+
                 {asset.status === "failed" && (
                   <div className="flex gap-2">
-                    {asset.asset_type === "image" && (
+                    {(asset.asset_type === "image" || asset.asset_type === "audio") && (
                       <button
                         disabled={busyId === asset.asset_id}
                         onClick={() => void regenerateAsset(asset)}
                         className="flex-1 rounded-lg bg-[#13A982] px-2 py-2 text-xs font-semibold text-white hover:bg-[#0f9270] disabled:opacity-50"
                       >
-                        Retry image generation
+                        {asset.asset_type === "audio"
+                          ? "Retry voiceover"
+                          : "Retry image generation"}
                       </button>
                     )}
 

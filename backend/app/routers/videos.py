@@ -42,7 +42,10 @@ from app.schemas.video_planner import (
     VideoPlanRevisionRequest,
 )
 
-from app.services.asset_service import enqueue_image_generation
+from app.services.asset_service import (
+    enqueue_audio_generation,
+    enqueue_image_generation,
+)
 from app.services.brand_service import build_render_brand
 from app.services.video_format_service import generate_video_format
 from app.services.production_service import (
@@ -442,6 +445,135 @@ def generate_assets_from_plan(
         "results": results,
     }
 
+
+@router.post("/jobs/{job_id}/assets/generate-audio-from-plan", status_code=202)
+def generate_audio_from_plan(
+    job_id: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Queue ElevenLabs narration audio for every scene that has narration text.
+    Free-plan friendly: skips empty narration and already-completed audio.
+    """
+    job = db.query(VideoJob).filter(
+        VideoJob.id == job_id
+    ).first()
+
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Video job not found",
+        )
+
+    if job.status not in ("draft", "assets_pending", "assets_ready"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot generate audio in status: {job.status}",
+        )
+
+    plan_data = (job.input_data or {}).get("video_plan")
+
+    if not plan_data:
+        raise HTTPException(
+            status_code=422,
+            detail="Video job does not contain a storyboard",
+        )
+
+    plan = VideoPlan.model_validate(plan_data)
+    results = []
+
+    for scene in plan.scenes:
+        narration = (scene.narration or "").strip()
+
+        if not narration:
+            results.append({
+                "scene_number": scene.scene_number,
+                "status": "skipped",
+                "action": "skipped",
+                "reason": "empty_narration",
+            })
+            continue
+
+        latest_audio = db.query(VideoAsset).filter(
+            VideoAsset.job_id == job.id,
+            VideoAsset.scene_number == scene.scene_number,
+            VideoAsset.asset_type == "audio",
+        ).order_by(
+            VideoAsset.created_at.desc()
+        ).first()
+
+        if latest_audio:
+            if latest_audio.status in ("pending", "generating"):
+                results.append({
+                    "scene_number": scene.scene_number,
+                    "asset_id": latest_audio.id,
+                    "status": latest_audio.status,
+                    "action": "skipped",
+                })
+                continue
+
+            if (
+                latest_audio.status == "completed"
+                and latest_audio.review_status != "rejected"
+            ):
+                results.append({
+                    "scene_number": scene.scene_number,
+                    "asset_id": latest_audio.id,
+                    "status": latest_audio.status,
+                    "review_status": latest_audio.review_status,
+                    "action": "skipped",
+                })
+                continue
+
+        try:
+            queued = enqueue_audio_generation(
+                job_id=job.id,
+                scene_number=scene.scene_number,
+                narration=narration,
+            )
+
+            results.append({
+                "scene_number": scene.scene_number,
+                "asset_id": queued.get("asset_id"),
+                "status": queued.get("status", "queued"),
+                "action": "queued",
+                "text_length": queued.get("text_length"),
+            })
+
+        except ValueError as exc:
+            results.append({
+                "scene_number": scene.scene_number,
+                "status": "failed",
+                "error": str(exc),
+            })
+
+        except Exception as exc:
+            logger.exception(
+                "Failed to enqueue audio generation for scene %s",
+                scene.scene_number,
+            )
+            results.append({
+                "scene_number": scene.scene_number,
+                "status": "failed",
+                "error": str(exc),
+            })
+
+    queued_count = sum(
+        1 for item in results if item.get("action") == "queued"
+    )
+
+    if queued_count and job.status == "draft":
+        job.status = "assets_pending"
+        db.commit()
+
+    return {
+        "job_id": job.id,
+        "scene_count": len(plan.scenes),
+        "queued_count": queued_count,
+        "results": results,
+    }
+
+
 @router.post("/jobs/{job_id}/render", status_code=202)
 def render_video_job(
     job_id: str,
@@ -519,7 +651,7 @@ def render_video_job(
             missing_scenes.append(scene.scene_number)
             continue
 
-        scenes.append({
+        scene_payload = {
             "scene_number": scene.scene_number,
             "duration_seconds": scene.duration_seconds,
             "visual_type": asset.asset_type,
@@ -531,7 +663,35 @@ def render_video_job(
             "animation": {
                 "type": "slow_zoom_in",
             },
-        })
+        }
+
+        audio_asset = db.query(VideoAsset).filter(
+            VideoAsset.job_id == job.id,
+            VideoAsset.scene_number == scene.scene_number,
+            VideoAsset.asset_type == "audio",
+            VideoAsset.status == "completed",
+            VideoAsset.review_status == "approved",
+        ).order_by(
+            VideoAsset.created_at.desc()
+        ).first()
+
+        if audio_asset and audio_asset.storage_path:
+            audio_path = Path(audio_asset.storage_path).resolve()
+
+            try:
+                audio_path.relative_to(ASSET_STORAGE)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Invalid audio path for scene {scene.scene_number}"
+                    ),
+                )
+
+            if audio_path.is_file():
+                scene_payload["audio_path"] = str(audio_path)
+
+        scenes.append(scene_payload)
 
     if missing_scenes:
         raise HTTPException(

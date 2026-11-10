@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import AssetGallery from "@/components/AssetGallery";
 import BrandSettings from "@/components/BrandSettings";
 import PublishAccounts from "@/components/PublishAccounts";
+import MarketingPosts from "@/components/MarketingPosts";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -143,6 +144,7 @@ export default function Home() {
   const [planBusy, setPlanBusy] = useState(false);
   const [draftBusy, setDraftBusy] = useState(false);
   const [assetBusy, setAssetBusy] = useState(false);
+  const [audioBusy, setAudioBusy] = useState(false);
   const [renderBusy, setRenderBusy] = useState(false);
   const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
   const [publishBusyId, setPublishBusyId] = useState<string | null>(null);
@@ -363,6 +365,30 @@ const loadJobs = useCallback(async () => {
       setError(err instanceof Error ? err.message : "Image generation request failed.");
     } finally {
       setAssetBusy(false);
+    }
+  }
+
+  async function generateSceneAudio() {
+    if (!selectedJob) {
+      setError("Save the storyboard as a draft before generating voiceover.");
+      return;
+    }
+    setAudioBusy(true);
+    setError("");
+    setWorkflowMessage("");
+    try {
+      const result = await apiRequest(
+        `/videos/jobs/${selectedJob.id}/assets/generate-audio-from-plan`,
+        { method: "POST" }
+      );
+      await loadJobs();
+      setWorkflowMessage(
+        `Voiceover generation submitted. ${result.queued_count ?? 0} scenes queued for ElevenLabs TTS.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Voiceover generation request failed.");
+    } finally {
+      setAudioBusy(false);
     }
   }
 
@@ -972,7 +998,7 @@ const loadJobs = useCallback(async () => {
                     </select>
                   </div>
                 </div>
-                <div className="mt-5 grid gap-3 md:grid-cols-3">
+                <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <button type="button" onClick={() => void generateSceneAssets()}
                     disabled={!selectedJob || assetBusy}
                     className="rounded-lg border border-slate-200 p-4 text-left hover:border-emerald-300 hover:bg-emerald-50/30 disabled:opacity-50">
@@ -983,10 +1009,20 @@ const loadJobs = useCallback(async () => {
                       Generate one FAL image for each storyboard scene.
                     </p>
                   </button>
+                  <button type="button" onClick={() => void generateSceneAudio()}
+                    disabled={!selectedJob || audioBusy}
+                    className="rounded-lg border border-slate-200 p-4 text-left hover:border-emerald-300 hover:bg-emerald-50/30 disabled:opacity-50">
+                    <div className="text-sm font-semibold text-slate-800">
+                      {audioBusy ? "Submitting..." : "2. Generate voiceover"}
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">
+                      ElevenLabs free-tier TTS from each scene narration.
+                    </p>
+                  </button>
                   <button type="button" onClick={() => setActiveSection("Video Library")}
                     disabled={!selectedJob}
                     className="rounded-lg border border-slate-200 p-4 text-left hover:border-emerald-300 hover:bg-emerald-50/30 disabled:opacity-50">
-                    <div className="text-sm font-semibold text-slate-800">2. Create clips and approve assets</div>
+                    <div className="text-sm font-semibold text-slate-800">3. Create clips and approve assets</div>
                     <p className="mt-1 text-xs text-slate-500">
                       Open the asset gallery to generate AI clips, preview results, and approve images.
                     </p>
@@ -995,10 +1031,10 @@ const loadJobs = useCallback(async () => {
                     disabled={!selectedJob || renderBusy}
                     className="rounded-lg bg-[#13A982] p-4 text-left text-white hover:bg-[#0f9270] disabled:opacity-50">
                     <div className="text-sm font-semibold">
-                      {renderBusy ? "Submitting render..." : "3. Render approved video"}
+                      {renderBusy ? "Submitting render..." : "4. Render approved video"}
                     </div>
                     <p className="mt-1 text-xs text-white/80">
-                      Uses completed AI clips when available; every source image still needs approval.
+                      Includes voiceover when present; every source image still needs approval.
                     </p>
                   </button>
                 </div>
@@ -1083,6 +1119,9 @@ const loadJobs = useCallback(async () => {
           {/* Brand */}
           {activeSection === "Brand" && <BrandSettings />}
 
+          {/* Marketing */}
+          {activeSection === "Marketing" && <MarketingPosts />}
+
           {/* Publishing */}
           {activeSection === "Publishing" && <PublishAccounts />}
 
@@ -1092,6 +1131,7 @@ const loadJobs = useCallback(async () => {
             "Video Studio",
             "Video Library",
             "Brand",
+            "Marketing",
             "Publishing",
           ].includes(activeSection) && (
             <section className="rounded-xl border border-[#E5EAF0] bg-white p-10 text-center">

@@ -29,6 +29,7 @@ before(async () => {
   await fs.mkdir(path.join(assetDir, "brand", "profile"), { recursive: true });
 
   await fs.writeFile(path.join(assetDir, "job", "scene_01", "image.png"), "x");
+  await fs.writeFile(path.join(assetDir, "job", "scene_01", "voice.mp3"), "x");
   await fs.writeFile(path.join(assetDir, "job", "scene_02", "image.png"), "x");
   await fs.writeFile(path.join(assetDir, "brand", "profile", "logo.png"), "x");
   await fs.writeFile(path.join(assetDir, "brand", "profile", "logo.svg"), "x");
@@ -168,5 +169,33 @@ test("overlong brand text is rejected", async () => {
       manifest({ brand: brand({ tagline: "x".repeat(201) }) })
     ),
     /Invalid brand tagline/
+  );
+});
+
+test("optional scene audio is served from asset storage", async () => {
+  const input = manifest();
+  input.scenes[0].audio_path = path.join(
+    assetDir,
+    "job",
+    "scene_01",
+    "voice.mp3"
+  );
+
+  const result = await validateDynamicManifest(input);
+
+  assert.equal(
+    result.scenes[0].audio_src,
+    "http://127.0.0.1:8100/assets/job/scene_01/voice.mp3"
+  );
+  assert.equal(result.scenes[1].audio_src, null);
+});
+
+test("audio outside the asset directory is rejected", async () => {
+  const input = manifest();
+  input.scenes[0].audio_path = outsideLogo;
+
+  await assert.rejects(
+    validateDynamicManifest(input),
+    /outside the asset storage directory/
   );
 });

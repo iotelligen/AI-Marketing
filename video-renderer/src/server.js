@@ -265,6 +265,52 @@ async function validateDynamicManifest(body) {
       .map(encodeURIComponent)
       .join("/");
 
+    let audioSrc = null;
+
+    if (scene.audio_path) {
+      if (typeof scene.audio_path !== "string") {
+        throw new Error(
+          `Invalid audio path for scene ${scene.scene_number}`
+        );
+      }
+
+      const realAudioPath = await fs.realpath(scene.audio_path);
+      const audioRelativePath = path.relative(assetRoot, realAudioPath);
+
+      if (
+        !audioRelativePath ||
+        audioRelativePath.startsWith("..") ||
+        path.isAbsolute(audioRelativePath)
+      ) {
+        throw new Error(
+          `Audio path is outside the asset storage directory for scene ${scene.scene_number}`
+        );
+      }
+
+      const audioExtension = path.extname(realAudioPath).toLowerCase();
+
+      if (![".mp3", ".wav", ".m4a", ".aac"].includes(audioExtension)) {
+        throw new Error(
+          `Unsupported audio format for scene ${scene.scene_number}`
+        );
+      }
+
+      const audioStat = await fs.stat(realAudioPath);
+
+      if (!audioStat.isFile()) {
+        throw new Error(
+          `Audio path is not a file for scene ${scene.scene_number}`
+        );
+      }
+
+      const encodedAudioPath = audioRelativePath
+        .split(path.sep)
+        .map(encodeURIComponent)
+        .join("/");
+
+      audioSrc = `http://127.0.0.1:${PORT}/assets/${encodedAudioPath}`;
+    }
+
     totalDuration += scene.duration_seconds;
 
     scenes.push({
@@ -272,6 +318,7 @@ async function validateDynamicManifest(body) {
       duration_seconds: scene.duration_seconds,
       visual_type: scene.visual_type,
       src: `http://127.0.0.1:${PORT}/assets/${encodedPath}`,
+      audio_src: audioSrc,
       beat: SCENE_BEATS.includes(scene.beat) ? scene.beat : null,
       narration: scene.narration || "",
       on_screen_text: scene.on_screen_text || "",

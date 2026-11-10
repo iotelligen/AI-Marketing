@@ -181,3 +181,84 @@ def enqueue_video_generation(
         }
     finally:
         db.close()
+
+
+def enqueue_audio_generation(
+    job_id: str,
+    scene_number: int,
+    narration: str,
+) -> dict:
+    """
+    Queue ElevenLabs narration audio for one storyboard scene.
+    """
+    cleaned = (narration or "").strip()
+
+    if not cleaned:
+        raise ValueError("Narration text cannot be empty")
+
+    db = SessionLocal()
+
+    try:
+        video_job = db.query(VideoJob).filter(
+            VideoJob.id == job_id
+        ).first()
+
+        if not video_job:
+            raise ValueError("Video job not found")
+
+        asset_id = str(uuid.uuid4())
+        asset = VideoAsset(
+            id=asset_id,
+            job_id=job_id,
+            scene_number=scene_number,
+            asset_type="audio",
+            provider="elevenlabs",
+            model=os.getenv(
+                "ELEVENLABS_MODEL_ID",
+                "eleven_flash_v2_5",
+            ),
+            status="pending",
+            prompt=cleaned,
+            filename=f"pending_{asset_id}.mp3",
+            review_status="approved",
+            asset_metadata={
+                "generation_type": "text_to_speech",
+                "voice_id": os.getenv(
+                    "ELEVENLABS_VOICE_ID",
+                    "JBFqnCBsd6RMkjVDRZzb",
+                ),
+            },
+        )
+
+        db.add(asset)
+        db.commit()
+
+        try:
+            queue = Queue(
+                "asset-generation",
+                connection=get_redis_connection(),
+                default_timeout=300,
+            )
+            queue.enqueue(
+                "app.workers.asset_worker.generate_audio_asset",
+                asset_id,
+                job_timeout=300,
+                result_ttl=86400,
+                failure_ttl=604800,
+            )
+        except Exception:
+            asset.status = "failed"
+            asset.error_message = "Unable to enqueue audio generation task"
+            db.commit()
+            raise
+
+        return {
+            "asset_id": asset_id,
+            "job_id": job_id,
+            "scene_number": scene_number,
+            "asset_type": "audio",
+            "status": "pending",
+            "text_length": len(cleaned),
+        }
+    finally:
+        db.close()

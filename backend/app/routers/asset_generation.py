@@ -22,8 +22,11 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.video_job import VideoJob
 from app.models.video_asset import VideoAsset
-from app.services.asset_service import enqueue_image_generation
-from app.services.asset_service import enqueue_video_generation
+from app.services.asset_service import (
+    enqueue_audio_generation,
+    enqueue_image_generation,
+    enqueue_video_generation,
+)
 
 
 router = APIRouter(
@@ -45,6 +48,11 @@ class AssetReviewRequest(BaseModel):
 class VideoGenerationRequest(BaseModel):
     motion_prompt: str = Field(min_length=5, max_length=5000)
     duration_seconds: int = Field(default=10, ge=4, le=15)
+
+
+class AudioGenerationRequest(BaseModel):
+    scene_number: int = Field(ge=1)
+    narration: str = Field(min_length=1, max_length=2500)
 
 
 def serialize_asset(asset: VideoAsset) -> dict:
@@ -161,6 +169,46 @@ def create_image_asset(
         raise HTTPException(
             status_code=503,
             detail="Unable to enqueue image generation",
+        )
+
+
+@router.post(
+    "/jobs/{job_id}/assets/audio",
+    status_code=202,
+)
+def create_audio_asset(
+    job_id: str,
+    data: AudioGenerationRequest,
+    db: Session = Depends(get_db),
+):
+    video_job = db.query(VideoJob).filter(
+        VideoJob.id == job_id
+    ).first()
+
+    if not video_job:
+        raise HTTPException(
+            status_code=404,
+            detail="Video job not found",
+        )
+
+    try:
+        return enqueue_audio_generation(
+            job_id=job_id,
+            scene_number=data.scene_number,
+            narration=data.narration,
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        )
+
+    except Exception:
+        logging.exception("Audio generation enqueue failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to enqueue audio generation",
         )
 
 
@@ -319,8 +367,11 @@ def regenerate_video_asset(
     if not asset:
         raise HTTPException(404, "Video asset not found")
 
-    if asset.asset_type != "image":
-        raise HTTPException(422, "Only image assets can be regenerated")
+    if asset.asset_type not in ("image", "audio"):
+        raise HTTPException(
+            422,
+            "Only image or audio assets can be regenerated",
+        )
 
     if asset.status in ("pending", "generating"):
         raise HTTPException(
@@ -334,22 +385,31 @@ def regenerate_video_asset(
             "Original generation prompt is unavailable",
         )
 
-    metadata = asset.asset_metadata or {}
-    aspect_ratio = metadata.get("aspect_ratio", "9:16")
-
     try:
-        result = enqueue_image_generation(
-            job_id=asset.job_id,
-            scene_number=asset.scene_number,
-            prompt=asset.prompt,
-            aspect_ratio=aspect_ratio,
-        )
+        if asset.asset_type == "audio":
+            result = enqueue_audio_generation(
+                job_id=asset.job_id,
+                scene_number=asset.scene_number,
+                narration=asset.prompt,
+            )
+        else:
+            metadata = asset.asset_metadata or {}
+            aspect_ratio = metadata.get("aspect_ratio", "9:16")
+            result = enqueue_image_generation(
+                job_id=asset.job_id,
+                scene_number=asset.scene_number,
+                prompt=asset.prompt,
+                aspect_ratio=aspect_ratio,
+            )
 
         return {
             **result,
             "source_asset_id": asset.id,
             "message": "New generation queued",
         }
+
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
     except Exception:
         logging.exception("Asset regeneration enqueue failed")

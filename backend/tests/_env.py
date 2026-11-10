@@ -23,6 +23,8 @@ from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from app.database import Base  # noqa: E402
 from app.models.brand_profile import BrandProfile  # noqa: E402
+from app.models.marketing_post import MarketingPost  # noqa: E402
+from app.models.marketing_post_version import MarketingPostVersion  # noqa: E402
 from app.models.publish_account import PublishAccount  # noqa: E402
 from app.models.publish_job import PublishJob  # noqa: E402
 from app.models.video_asset import VideoAsset  # noqa: E402
@@ -37,6 +39,8 @@ WORKSPACE_SLUG = "iotelligen-marketing"
 TEST_TABLES = [
     Workspace.__table__,
     BrandProfile.__table__,
+    MarketingPost.__table__,
+    MarketingPostVersion.__table__,
     VideoJob.__table__,
     VideoAsset.__table__,
     VideoVersion.__table__,

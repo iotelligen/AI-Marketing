@@ -27,7 +27,7 @@
   },
 
   "defaults": {
-    "workspace": "iotelligen",
+    "workspace": "iotelligen-marketing",
     "platform": "linkedin",
     "target_audience": "Factory owners and production managers",
     "objective": "Generate awareness and leads",
@@ -45,11 +45,12 @@
   "permissions": {
     "allowed_workspaces": [
       "iotelligen",
+      "iotelligen-marketing",
       "marketing"
     ],
     "can_generate_posts": true,
     "can_revise_posts": true,
-    "can_publish_posts": false,
+    "can_publish_posts": true,
     "requires_human_approval": true
   }
 }

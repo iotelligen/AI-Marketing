@@ -2,6 +2,7 @@ import React from "react";
 
 import {
   AbsoluteFill,
+  Audio,
   Sequence,
   Img,
   OffthreadVideo,
@@ -15,6 +16,8 @@ export type DynamicScene = {
   duration_seconds: number;
   visual_type: "image" | "video";
   src: string;
+  // Optional ElevenLabs narration for this scene.
+  audio_src?: string | null;
   // The "cta" beat is drawn as the branded end card.
   beat?:
     | "hook"
@@ -272,6 +275,8 @@ const Scene: React.FC<{
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#071522", opacity }}>
+      {scene.audio_src ? <Audio src={scene.audio_src} /> : null}
+
       <AbsoluteFill
         style={{
           transform: `translate(${translateX}px, ${slideY}px) scale(${scale})`,

@@ -1,8 +1,8 @@
-
 import logging
 import os
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,13 @@ from app.services.agent_config_service import (
     validate_workspace_access,
     get_agent_platforms,
 )
+from app.services.marketing_publish_service import (
+    TERMINAL_PUBLISH_STATUSES,
+    approve_marketing_post,
+    publish_marketing_post,
+    serialize_marketing_post,
+)
+from app.services.publish_service import publish_dry_run_default
 
 
 logger = logging.getLogger(__name__)
@@ -34,7 +41,7 @@ MARKETING_AGENT_ID = "marketing"
 
 DEFAULT_WORKSPACE = os.getenv(
     "MARKETING_WORKSPACE",
-    "iotelligen",
+    "iotelligen-marketing",
 )
 
 
@@ -88,6 +95,39 @@ def validate_revision_permission(config):
         )
 
 
+def validate_publish_permission(config):
+    permissions = config.get("permissions", {})
+
+    if not permissions.get("can_publish_posts", False):
+        raise HTTPException(
+            status_code=403,
+            detail="Agent is not allowed to publish posts",
+        )
+
+
+def get_post_or_404(db: Session, post_id: str) -> MarketingPost:
+    post = (
+        db.query(MarketingPost)
+        .filter(MarketingPost.id == post_id)
+        .first()
+    )
+
+    if not post:
+        raise HTTPException(
+            status_code=404,
+            detail="Marketing post not found",
+        )
+
+    return post
+
+
+def resolve_post_workspace(post: MarketingPost, config) -> str:
+    return (
+        getattr(post, "workspace_slug", None)
+        or get_default_workspace(config)
+    )
+
+
 class GeneratePostRequest(BaseModel):
     topic: str = Field(
         min_length=3,
@@ -120,11 +160,128 @@ class GeneratePostRequest(BaseModel):
     )
 
 
+class GenerateAndPublishRequest(GeneratePostRequest):
+    dry_run: bool | None = None
+    requested_by: Literal["n8n", "api", "dashboard"] = "api"
+
+
 class RevisePostRequest(BaseModel):
     instructions: str = Field(
         min_length=3,
         max_length=4000,
     )
+
+
+class PublishPostRequest(BaseModel):
+    dry_run: bool | None = None
+    auto_approve: bool = True
+    requested_by: Literal["n8n", "api", "dashboard"] = "api"
+
+
+def _create_generated_post(
+    *,
+    db: Session,
+    data: GeneratePostRequest,
+    config,
+) -> tuple[MarketingPost, MarketingPostVersion]:
+    validate_generation_permission(config)
+
+    platform = validate_platform(
+        config,
+        data.platform,
+    )
+
+    validate_workspace(
+        config,
+        data.workspace,
+    )
+
+    knowledge, sources = retrieve_knowledge(
+        db=db,
+        workspace_slug=data.workspace,
+        query=data.topic,
+    )
+
+    generated = generate_marketing_post(
+        topic=data.topic,
+        platform=platform,
+        target_audience=data.target_audience,
+        objective=data.objective,
+        language=data.language,
+        knowledge=knowledge,
+    )
+
+    post = MarketingPost(
+        workspace_slug=data.workspace,
+        topic=data.topic,
+        platform=platform,
+        target_audience=data.target_audience,
+        objective=data.objective,
+        language=data.language,
+        title=generated["title"],
+        content=generated["content"],
+        hashtags=generated["hashtags"],
+        sources=sources,
+        llm_model=generated["llm_model"],
+        status="draft",
+        publish_metadata={},
+    )
+
+    db.add(post)
+    db.flush()
+
+    version = MarketingPostVersion(
+        post_id=post.id,
+        version_number=1,
+        instructions="Initial generation",
+        title=generated["title"],
+        content=generated["content"],
+        hashtags=generated["hashtags"],
+        sources=sources,
+        skills_used=generated.get("skills_used", []),
+        llm_model=generated["llm_model"],
+    )
+
+    db.add(version)
+    db.commit()
+    db.refresh(post)
+    db.refresh(version)
+
+    return post, version
+
+
+@router.get("/posts")
+def list_posts(
+    workspace: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    query = db.query(MarketingPost)
+
+    if workspace:
+        query = query.filter(
+            MarketingPost.workspace_slug == workspace
+        )
+
+    if status:
+        query = query.filter(MarketingPost.status == status)
+
+    posts = (
+        query
+        .order_by(MarketingPost.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "total": len(posts),
+        "dry_run_default": publish_dry_run_default(),
+        "posts": [
+            serialize_marketing_post(post)
+            for post in posts
+        ],
+    }
 
 
 @router.post("/posts/generate", status_code=201)
@@ -134,86 +291,18 @@ def generate_post(
 ):
     try:
         config = get_marketing_config()
-
-        validate_generation_permission(config)
-
-        platform = validate_platform(
-            config,
-            data.platform,
-        )
-
-        validate_workspace(
-            config,
-            data.workspace,
-        )
-
-        knowledge, sources = retrieve_knowledge(
+        post, version = _create_generated_post(
             db=db,
-            workspace_slug=data.workspace,
-            query=data.topic,
+            data=data,
+            config=config,
         )
 
-        generated = generate_marketing_post(
-            topic=data.topic,
-            platform=platform,
-            target_audience=data.target_audience,
-            objective=data.objective,
-            language=data.language,
-            knowledge=knowledge,
+        return serialize_marketing_post(
+            post,
+            version_id=version.id,
+            version_number=version.version_number,
+            skills_used=version.skills_used,
         )
-
-        post = MarketingPost(
-            topic=data.topic,
-            platform=platform,
-            target_audience=data.target_audience,
-            objective=data.objective,
-            language=data.language,
-            title=generated["title"],
-            content=generated["content"],
-            hashtags=generated["hashtags"],
-            sources=sources,
-            llm_model=generated["llm_model"],
-            status="draft",
-        )
-
-        db.add(post)
-        db.flush()
-
-        # Save initial generation as version 1.
-        version = MarketingPostVersion(
-            post_id=post.id,
-            version_number=1,
-            instructions="Initial generation",
-            title=generated["title"],
-            content=generated["content"],
-            hashtags=generated["hashtags"],
-            sources=sources,
-            skills_used=generated.get("skills_used", []),
-            llm_model=generated["llm_model"],
-        )
-
-        db.add(version)
-
-        db.commit()
-
-        db.refresh(post)
-        db.refresh(version)
-
-        return {
-            "id": post.id,
-            "version_id": version.id,
-            "version_number": version.version_number,
-            "topic": post.topic,
-            "platform": post.platform,
-            "title": post.title,
-            "content": post.content,
-            "hashtags": post.hashtags,
-            "status": post.status,
-            "llm_model": post.llm_model,
-            "skills_used": version.skills_used,
-            "sources": post.sources,
-            "created_at": post.created_at,
-        }
 
     except HTTPException:
         db.rollback()
@@ -240,29 +329,134 @@ def generate_post(
         )
 
 
+@router.post("/posts/generate-and-publish", status_code=201)
+def generate_and_publish_post(
+    data: GenerateAndPublishRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Generate a draft, auto-approve it, then publish (dry-run by default).
+    """
+    try:
+        config = get_marketing_config()
+        validate_publish_permission(config)
+
+        post, version = _create_generated_post(
+            db=db,
+            data=data,
+            config=config,
+        )
+
+        published = publish_marketing_post(
+            db,
+            post,
+            dry_run=data.dry_run,
+            auto_approve=True,
+            requested_by=data.requested_by,
+        )
+
+        payload = serialize_marketing_post(
+            published,
+            version_id=version.id,
+            version_number=version.version_number,
+            skills_used=version.skills_used,
+        )
+        payload["publish_status"] = published.status
+        return payload
+
+    except HTTPException:
+        db.rollback()
+        raise
+
+    except ValueError as exc:
+        db.rollback()
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        )
+
+    except Exception:
+        db.rollback()
+
+        logger.exception(
+            "Marketing generate-and-publish failed"
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Marketing generate-and-publish failed. "
+                "Check API logs."
+            ),
+        )
+
+
+@router.get("/posts/{post_id}")
+def get_post(
+    post_id: str,
+    db: Session = Depends(get_db),
+):
+    post = get_post_or_404(db, post_id)
+    return serialize_marketing_post(post)
+
+
+@router.post("/posts/{post_id}/approve")
+def approve_post(
+    post_id: str,
+    db: Session = Depends(get_db),
+):
+    post = get_post_or_404(db, post_id)
+
+    try:
+        approved = approve_marketing_post(db, post)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    return serialize_marketing_post(approved)
+
+
+@router.post("/posts/{post_id}/publish", status_code=202)
+def publish_post(
+    post_id: str,
+    data: PublishPostRequest | None = None,
+    db: Session = Depends(get_db),
+):
+    payload = data or PublishPostRequest()
+    post = get_post_or_404(db, post_id)
+
+    try:
+        config = get_marketing_config()
+        validate_publish_permission(config)
+
+        published = publish_marketing_post(
+            db,
+            post,
+            dry_run=payload.dry_run,
+            auto_approve=payload.auto_approve,
+            requested_by=payload.requested_by,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    result = serialize_marketing_post(published)
+    result["publish_status"] = published.status
+    return result
+
+
 @router.post("/posts/{post_id}/revise")
 def revise_post(
     post_id: str,
     data: RevisePostRequest,
     db: Session = Depends(get_db),
 ):
-    post = (
-        db.query(MarketingPost)
-        .filter(MarketingPost.id == post_id)
-        .first()
-    )
+    post = get_post_or_404(db, post_id)
 
-    if not post:
-        raise HTTPException(
-            status_code=404,
-            detail="Marketing post not found",
-        )
-
-    if post.status == "approved":
+    if post.status in ("approved", *TERMINAL_PUBLISH_STATUSES):
         raise HTTPException(
             status_code=409,
             detail=(
-                "Approved posts cannot be revised. "
+                "Approved or published posts cannot be revised. "
                 "Create a new draft instead."
             ),
         )
@@ -277,9 +471,7 @@ def revise_post(
             post.platform,
         )
 
-        # The current MarketingPost model does not store
-        # its originating workspace, so use the agent default.
-        workspace = get_default_workspace(config)
+        workspace = resolve_post_workspace(post, config)
 
         validate_workspace(
             config,
@@ -341,7 +533,6 @@ def revise_post(
 
         new_version_number = previous_version_number + 1
 
-        # Save the new version.
         version = MarketingPostVersion(
             post_id=post.id,
             version_number=new_version_number,
@@ -356,13 +547,13 @@ def revise_post(
 
         db.add(version)
 
-        # Update the current post.
         post.title = generated["title"]
         post.content = generated["content"]
         post.hashtags = generated["hashtags"]
         post.sources = sources
         post.llm_model = generated["llm_model"]
         post.status = "draft"
+        post.publish_error = None
 
         db.commit()
         db.refresh(version)
@@ -411,17 +602,7 @@ def get_post_versions(
     post_id: str,
     db: Session = Depends(get_db),
 ):
-    post = (
-        db.query(MarketingPost)
-        .filter(MarketingPost.id == post_id)
-        .first()
-    )
-
-    if not post:
-        raise HTTPException(
-            status_code=404,
-            detail="Marketing post not found",
-        )
+    post = get_post_or_404(db, post_id)
 
     versions = (
         db.query(MarketingPostVersion)
