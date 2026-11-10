@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import AssetGallery from "@/components/AssetGallery";
 import BrandSettings from "@/components/BrandSettings";
+import PublishAccounts from "@/components/PublishAccounts";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -32,6 +33,9 @@ type VideoVersion = {
   height?: number;
   fps?: number;
   status: string;
+  approval_status?: "pending" | "approved" | "rejected";
+  approval_note?: string | null;
+  reviewed_at?: string | null;
 };
 
 type SceneBeat =
@@ -81,6 +85,7 @@ const navigation = [
   { label: "Video Studio", icon: "▣" },
   { label: "Video Library", icon: "▤" },
   { label: "Brand", icon: "◉" },
+  { label: "Publishing", icon: "⇪" },
   { label: "Marketing", icon: "◈" },
   { label: "Knowledge Base", icon: "▧" },
   { label: "Workflows", icon: "⌘" },
@@ -89,8 +94,12 @@ const navigation = [
 function statusColor(status: string) {
   switch (status) {
     case "completed":
+    case "approved":
+    case "dry_run":
+    case "published":
       return "bg-emerald-50 text-emerald-700";
     case "failed":
+    case "rejected":
       return "bg-red-50 text-red-700";
     case "rendering":
     case "active":
@@ -135,6 +144,8 @@ export default function Home() {
   const [draftBusy, setDraftBusy] = useState(false);
   const [assetBusy, setAssetBusy] = useState(false);
   const [renderBusy, setRenderBusy] = useState(false);
+  const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
+  const [publishBusyId, setPublishBusyId] = useState<string | null>(null);
   const [workflowMessage, setWorkflowMessage] = useState("");
 
 const pollingRef = useRef(false);
@@ -380,6 +391,83 @@ const loadJobs = useCallback(async () => {
       setError(err instanceof Error ? err.message : "Video rendering failed to start.");
     } finally {
       setRenderBusy(false);
+    }
+  }
+
+  async function reviewVideoVersion(
+    version: VideoVersion,
+    decision: "approved" | "rejected"
+  ) {
+    if (!selectedJob) return;
+
+    setApprovalBusyId(version.id);
+    setError("");
+    setWorkflowMessage("");
+
+    try {
+      await apiRequest(
+        `/videos/jobs/${selectedJob.id}/versions/${version.id}/approval`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            decision,
+            note:
+              decision === "approved"
+                ? "Approved from dashboard"
+                : "Rejected from dashboard",
+          }),
+        }
+      );
+      await loadVersions(selectedJob.id);
+      setWorkflowMessage(
+        decision === "approved"
+          ? `Version ${version.version_number} approved for publishing.`
+          : `Version ${version.version_number} rejected.`
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to update final video approval."
+      );
+    } finally {
+      setApprovalBusyId(null);
+    }
+  }
+
+  async function publishVideoVersion(version: VideoVersion) {
+    setPublishBusyId(version.id);
+    setError("");
+    setWorkflowMessage("");
+
+    try {
+      const result = await apiRequest("/publish/jobs", {
+        method: "POST",
+        body: JSON.stringify({
+          version_id: version.id,
+          platforms: ["linkedin"],
+          requested_by: "dashboard",
+        }),
+      });
+
+      const job = result?.jobs?.[0];
+      const status = job?.status ?? "unknown";
+
+      setWorkflowMessage(
+        status === "dry_run"
+          ? `Dry-run publish completed for version ${version.version_number}. Nothing was posted to LinkedIn.`
+          : status === "published"
+            ? `LinkedIn publish completed for version ${version.version_number}.`
+            : `Publish finished with status: ${status}${
+                job?.error_message ? ` — ${job.error_message}` : ""
+              }`
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Unable to publish this version."
+      );
+    } finally {
+      setPublishBusyId(null);
     }
   }
 
@@ -655,6 +743,11 @@ const loadJobs = useCallback(async () => {
                 job={selectedJob}
                 videoUrl={videoUrl}
                 versions={versions}
+                approvalBusyId={approvalBusyId}
+                publishBusyId={publishBusyId}
+                onApprove={(version) => void reviewVideoVersion(version, "approved")}
+                onReject={(version) => void reviewVideoVersion(version, "rejected")}
+                onPublish={(version) => void publishVideoVersion(version)}
               />
             </>
           )}
@@ -922,7 +1015,16 @@ const loadJobs = useCallback(async () => {
               </section>
 
               <AssetGallery jobId={selectedJob?.id ?? null} />
-              <VideoPreview job={selectedJob} videoUrl={videoUrl} versions={versions} />
+              <VideoPreview
+                job={selectedJob}
+                videoUrl={videoUrl}
+                versions={versions}
+                approvalBusyId={approvalBusyId}
+                publishBusyId={publishBusyId}
+                onApprove={(version) => void reviewVideoVersion(version, "approved")}
+                onReject={(version) => void reviewVideoVersion(version, "rejected")}
+                onPublish={(version) => void publishVideoVersion(version)}
+              />
             </div>
           )}
 
@@ -954,11 +1056,22 @@ const loadJobs = useCallback(async () => {
                 onSelect={setSelectedJob}
               />
 
+              {workflowMessage && activeSection === "Video Library" && (
+                <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                  {workflowMessage}
+                </div>
+              )}
+
               <div className="mt-6">
                 <VideoPreview
                   job={selectedJob}
                   videoUrl={videoUrl}
                   versions={versions}
+                  approvalBusyId={approvalBusyId}
+                  publishBusyId={publishBusyId}
+                  onApprove={(version) => void reviewVideoVersion(version, "approved")}
+                  onReject={(version) => void reviewVideoVersion(version, "rejected")}
+                  onPublish={(version) => void publishVideoVersion(version)}
                 />
               </div>
               <div className="mt-6">
@@ -970,12 +1083,16 @@ const loadJobs = useCallback(async () => {
           {/* Brand */}
           {activeSection === "Brand" && <BrandSettings />}
 
+          {/* Publishing */}
+          {activeSection === "Publishing" && <PublishAccounts />}
+
           {/* Placeholder sections */}
           {![
             "Overview",
             "Video Studio",
             "Video Library",
             "Brand",
+            "Publishing",
           ].includes(activeSection) && (
             <section className="rounded-xl border border-[#E5EAF0] bg-white p-10 text-center">
               <div className="text-3xl text-slate-300">◈</div>
@@ -1092,14 +1209,26 @@ function VideoPreview({
   job,
   videoUrl,
   versions,
+  approvalBusyId,
+  publishBusyId,
+  onApprove,
+  onReject,
+  onPublish,
 }: {
   job: VideoJob | null;
   videoUrl: string | null;
   versions: VideoVersion[];
+  approvalBusyId?: string | null;
+  publishBusyId?: string | null;
+  onApprove?: (version: VideoVersion) => void;
+  onReject?: (version: VideoVersion) => void;
+  onPublish?: (version: VideoVersion) => void;
 }) {
   if (!job) {
     return null;
   }
+
+  const latestVersion = versions[0] ?? null;
 
   return (
     <section className="rounded-xl border border-[#E5EAF0] bg-white p-5">
@@ -1186,25 +1315,86 @@ function VideoPreview({
             </div>
 
             {versions.length > 0 ? (
-              <div className="mt-2 space-y-2">
-                {versions.map((version) => (
-                  <div
-                    key={version.id}
-                    className="flex items-center justify-between rounded-lg bg-slate-50 p-3"
-                  >
-                    <div>
-                      <div className="text-sm font-medium text-slate-700">
-                        Version {version.version_number}
+              <div className="mt-2 space-y-3">
+                {versions.map((version) => {
+                  const approval = version.approval_status ?? "pending";
+                  const isLatest = latestVersion?.id === version.id;
+                  const canReview =
+                    job.status === "completed" &&
+                    isLatest &&
+                    approval === "pending";
+                  const canPublish =
+                    job.status === "completed" &&
+                    isLatest &&
+                    approval === "approved";
+
+                  return (
+                    <div
+                      key={version.id}
+                      className="rounded-lg bg-slate-50 p-3"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-slate-700">
+                            Version {version.version_number}
+                            {isLatest ? " · latest" : ""}
+                          </div>
+                          <div className="mt-1 text-xs text-slate-400">
+                            {version.filename}
+                            {version.width && version.height
+                              ? ` · ${version.width} × ${version.height}`
+                              : ""}
+                          </div>
+                        </div>
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${statusColor(approval)}`}
+                        >
+                          {approval}
+                        </span>
                       </div>
-                      <div className="text-xs text-slate-400">
-                        {version.filename}
-                      </div>
+
+                      {(canReview || canPublish) && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {canReview && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={approvalBusyId === version.id}
+                                onClick={() => onApprove?.(version)}
+                                className="rounded-lg bg-[#13A982] px-3 py-2 text-xs font-semibold text-white hover:bg-[#0f9270] disabled:opacity-60"
+                              >
+                                {approvalBusyId === version.id
+                                  ? "Saving..."
+                                  : "Approve for publish"}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={approvalBusyId === version.id}
+                                onClick={() => onReject?.(version)}
+                                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-white disabled:opacity-60"
+                              >
+                                Reject
+                              </button>
+                            </>
+                          )}
+
+                          {canPublish && (
+                            <button
+                              type="button"
+                              disabled={publishBusyId === version.id}
+                              onClick={() => onPublish?.(version)}
+                              className="rounded-lg bg-[#172033] px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                            >
+                              {publishBusyId === version.id
+                                ? "Publishing..."
+                                : "Publish to LinkedIn"}
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
-                    <span className="text-xs text-emerald-700">
-                      {version.width} × {version.height}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <p className="mt-2 text-xs text-slate-400">
