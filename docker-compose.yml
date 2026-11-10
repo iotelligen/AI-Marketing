@@ -155,11 +155,17 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # Publishing: dry-run by default so n8n can schedule safely.
+      PUBLISH_DRY_RUN: ${PUBLISH_DRY_RUN:-true}
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000}
+      LINKEDIN_API_VERSION: ${LINKEDIN_API_VERSION:-202405}
     volumes:
       - ./storage/documents:/data/documents
       - ./storage/assets:/data/assets
     depends_on:
       postgres:
+        condition: service_healthy
+      video-renderer:
         condition: service_healthy
     networks:
       - backend

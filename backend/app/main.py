@@ -26,6 +26,10 @@ from app.routers.asset_generation import router as asset_generation_router
 from app.models.brand_profile import BrandProfile
 from app.routers.brand import router as brand_router
 
+from app.models.publish_account import PublishAccount
+from app.models.publish_job import PublishJob
+from app.routers.publish import router as publish_router
+
 # Initial prototype: create tables automatically.
 Base.metadata.create_all(bind=engine)
 
@@ -55,6 +59,7 @@ app.include_router(marketing_router)
 app.include_router(videos_router)
 app.include_router(asset_generation_router)
 app.include_router(brand_router)
+app.include_router(publish_router)
 
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=2, max_length=150)

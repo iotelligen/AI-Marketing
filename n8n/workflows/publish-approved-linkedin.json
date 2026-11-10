@@ -1,0 +1,159 @@
+{
+  "name": "Publish approved LinkedIn videos",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "url": "http://fastapi:8000/publish/ready",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "platforms",
+              "value": "linkedin"
+            },
+            {
+              "name": "limit",
+              "value": "20"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-ready",
+      "name": "Get ready videos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [260, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.total }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "has-items",
+      "name": "Has items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [520, 0]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "items",
+        "options": {}
+      },
+      "id": "split-items",
+      "name": "Split videos",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [780, -40]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://fastapi:8000/publish/jobs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"version_id\": \"{{ $json.version_id }}\",\n  \"platforms\": [\"linkedin\"],\n  \"requested_by\": \"n8n\"\n}",
+        "options": {}
+      },
+      "id": "create-publish-jobs",
+      "name": "Publish to LinkedIn",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, -40]
+    },
+    {
+      "parameters": {
+        "content": "## No approved videos waiting\nDry-run is ON by default in FastAPI (`PUBLISH_DRY_RUN=true`).\nApprove a VideoVersion in the dashboard, then re-run this workflow.",
+        "height": 220,
+        "width": 360
+      },
+      "id": "sticky-note",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [760, 140]
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "Get ready videos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get ready videos": {
+      "main": [
+        [
+          {
+            "node": "Has items?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has items?": {
+      "main": [
+        [
+          {
+            "node": "Split videos",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Split videos": {
+      "main": [
+        [
+          {
+            "node": "Publish to LinkedIn",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Oslo"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "1"
+}
